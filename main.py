@@ -1,10 +1,10 @@
 path = 'receipt.txt'
 
-lines = []
-with open(path, 'r') as f:
-    lines = f.readlines()
+counter = 0
+with open(path, encoding='utf-8') as f:
+    for line in f:
+        print(line.strip())
+        counter += 1
 
-for line in lines:
-    print(line.strip()) 
 
-print(f'Всего строк: {len(lines)}')
+print(f'Всего строк: {counter}')
