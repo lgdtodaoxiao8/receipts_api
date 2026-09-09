@@ -1,45 +1,70 @@
 path = 'receipt.txt'
 
-lines_counter = 0
 
-calculated_sum = 0
-total_formal = None
+def parse_line(line: str) -> tuple[str, int] | None:
+    parts = line.strip().split()
 
-try:
-    with open(path, encoding='utf-8') as f:
-        for line in f:
-            parts = line.strip().split()
-
-            try:
-                name = ' '.join(parts[:-1]) 
-                price = int(parts[-1])
-            except IndexError:
-                print('Строка пустая')
-                continue
-            except ValueError:
-                print(f'Цена в строке {' '.join(parts)} неверная')
-                continue
-            if name == 'Итого':
-                total_formal = price
-            else:
-                calculated_sum += price
-                print(f'{name} -> {price}')
-                lines_counter += 1
-
-
-    print(f'Всего позиций: {lines_counter}')
-    print(f'Итого по сумме: {calculated_sum}')
-
-    if total_formal is None:
-        print('В чеке отсутствует итог.')
+    try:
+        price = int(parts[-1])
+        name = ' '.join(parts[:-1])
+    except IndexError:
+        print('Строка пустая')
+        return None
+    except ValueError:
+        print(f'Цена в строке {' '.join(parts)} неверная')
+        return None
     else:
-        discrepancy = calculated_sum - total_formal
+        return name, price
+
+
+
+def read_receipt(path: str) -> tuple[list[tuple[str, int]], int | None]:
+    
+    with open(path, encoding='utf-8') as f:
+        pairs = []
+        total = None
+        for line in f:
+            pair = parse_line(line)
+            if pair is not None:
+                if pair[0] == 'Итого':
+                    total = pair[1]
+                else:
+                    pairs.append(pair)
+
+    return pairs, total
         
-        print(f'Итого по чеку: {total_formal}')
+
+
+def print_report(items: list[tuple[str, int]], total: int | None) -> None:
+    calculated_total = 0
+
+    for name, price in items:
+        calculated_total += price
+
+        print(f'{name} -> {price}')
+
+    print(f'Всего строк: {len(items)}')
+
+    print(f'Итого по сумме: {calculated_total}')
+
+    if total is None:
+        print('Итого отсутствует в чеке')
+    else:
+        print(f'Итого из чека: {total}')
+
+        discrepancy = calculated_total - total
+
         if discrepancy == 0:
-            print('Расхождения относительно чека нет')
+            print('Расхождений относительно чека нет')
+
         else:
             print(f'Расхождение относительно чека: {'+' if discrepancy > 0 else ''}{discrepancy}')
-except FileNotFoundError:
-    print('Файл не найден')
 
+
+if __name__ == "__main__":
+    try:
+        items, total = read_receipt(path)
+    except FileNotFoundError:
+        print('Путь к файлу неверный')
+    else:
+        print_report(items, total)
