@@ -17,7 +17,6 @@ def parse_line(line: str) -> tuple[str, int] | None:
         return name, price
 
 
-
 def read_receipt(path: str) -> tuple[list[tuple[str, int]], int | None]:
     
     with open(path, encoding='utf-8') as f:
