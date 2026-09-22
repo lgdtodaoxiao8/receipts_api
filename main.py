@@ -11,14 +11,14 @@ def parse_line(line: str) -> tuple[str, int] | None:
         print("Строка пустая")
         return None
     except ValueError:
-        print(f"Цена в строке {" ".join(parts)} неверная")
+        print(f"Цена в строке {' '.join(parts)} неверная")
         return None
     else:
         return name, price
 
 
 def read_receipt(path: str) -> tuple[list[tuple[str, int]], int | None]:
-    
+
     with open(path, encoding="utf-8") as f:
         pairs = []
         total = None
@@ -31,7 +31,6 @@ def read_receipt(path: str) -> tuple[list[tuple[str, int]], int | None]:
                     pairs.append(pair)
 
     return pairs, total
-        
 
 
 def print_report(items: list[tuple[str, int]], total: int | None) -> None:
@@ -57,7 +56,9 @@ def print_report(items: list[tuple[str, int]], total: int | None) -> None:
             print("Расхождений относительно чека нет")
 
         else:
-            print(f"Расхождение относительно чека: {"+" if discrepancy > 0 else ""}{discrepancy}")
+            print(
+                f"Расхождение относительно чека: {'+' if discrepancy > 0 else ''}{discrepancy}"
+            )
 
 
 if __name__ == "__main__":
