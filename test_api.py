@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -80,33 +81,6 @@ def test_pagination(client: TestClient, make_receipt):
     assert [row["shop"] for row in second_page.json()] == ["первый"]
 
 
-def test_create_receipt_empty_items(client: TestClient):
-    response = client.post(
-        "/receipts",
-        json={
-            "shop": "test",
-            "total": 100,
-            "items": [],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_receipt_total_not_number(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "shop": "test",
-            "total": "дорого",
-            "items": [{"name": "name", "price": 100}],
-        },
-    )
-
-    assert response.status_code == 422
-
-
 def test_create_receipt(client: TestClient):
     response = client.post(
         "/receipts",
@@ -131,134 +105,119 @@ def test_create_receipt(client: TestClient):
     assert data["id"] > 0
 
 
-def test_create_receipt_item_extra_field(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "shop": "Тест",
-            "items": [
-                {"name": "молоко", "price": 450, "лишнее": 1},
-            ],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_receipt_blank_name(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "items": [{"name": "   ", "price": 100}],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_receipt_negative_total(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "total": -5000,
-            "items": [{"name": "name", "price": 100}],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_receipt_item_price_not_number(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "items": [{"name": "name", "price": "дорого"}],
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
-
-
-def test_create_receipt_item_zero_price(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "items": [{"name": "name", "price": 0}],
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
-
-
-def test_create_receipt_item_negative_price(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "items": [{"name": "name", "price": -100}],
-        },
-    )
+@pytest.mark.parametrize(
+    "payload, expected_loc",
+    [
+        pytest.param(
+            {"items": []},
+            ["body", "items"],
+            id="empty_items",
+        ),
+        pytest.param(
+            {"items": [{"name": "молоко", "price": "дорого"}]},
+            ["body", "items", 0, "price"],
+            id="price_not_number",
+        ),
+        pytest.param(
+            {"items": [{"name": "молоко", "price": 0}]},
+            ["body", "items", 0, "price"],
+            id="zero_price",
+        ),
+        pytest.param(
+            {"items": [{"name": "молоко", "price": -100}]},
+            ["body", "items", 0, "price"],
+            id="negative_price",
+        ),
+        pytest.param(
+            {"items": [{"name": "   ", "price": 100}]},
+            ["body", "items", 0, "name"],
+            id="blank_name",
+        ),
+        pytest.param(
+            {
+                "total": -100,
+                "items": [{"name": "молоко", "price": 100}],
+            },
+            ["body", "total"],
+            id="negative_total",
+        ),
+        pytest.param(
+            {
+                "total": "много",
+                "items": [{"name": "молоко", "price": 100}],
+            },
+            ["body", "total"],
+            id="total_not_number",
+        ),
+        pytest.param(
+            {"items": [{"name": "молоко", "price": 100, "лишнее": 1}]},
+            ["body", "items", 0, "лишнее"],
+            id="item_extra_field",
+        ),
+        pytest.param(
+            {
+                "items": [{"name": "молоко", "price": 100}],
+                "лишнее": 1,
+            },
+            ["body", "лишнее"],
+            id="receipt_extra_field",
+        ),
+    ],
+)
+def test_create_receipt_invalid(client: TestClient, payload, expected_loc):
+    response = client.post("/receipts", json=payload)
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
+    assert len(response.json()["detail"]) == 1
+    assert response.json()["detail"][0]["loc"] == expected_loc
 
 
-def test_create_receipt_extra_field(client: TestClient):
-
-    response = client.post(
-        "/receipts",
-        json={
-            "лишнее": 1,
-            "items": [{"name": "молоко", "price": 100}]
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "лишнее"]
-
-
-def test_list_receipts_limit_zero(client: TestClient):
-
-    response = client.get("/receipts", params={"limit": 0})
-
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["query", "limit"]
-
-
-def test_list_receipts_limit_too_big(client: TestClient):
-    response = client.get("/receipts", params={"limit": 101})
-
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["query", "limit"]
-
-
-def test_list_receipts_negative_offset(client: TestClient):
-    response = client.get("/receipts", params={"offset": -1})
+@pytest.mark.parametrize(
+    "params, expected_loc",
+    [
+        pytest.param(
+            {"limit": 0},
+            ["query", "limit"],
+            id="limit_zero",
+        ),
+        pytest.param(
+            {"limit": 101},
+            ["query", "limit"],
+            id="limit_too_big",
+        ),
+        pytest.param(
+            {"offset": -1},
+            ["query", "offset"],
+            id="negative_offset",
+        ),
+    ],
+)
+def test_list_receipts_invalid_params(client: TestClient, params, expected_loc):
+    response = client.get("/receipts", params=params)
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["query", "offset"]
+    assert len(response.json()["detail"]) == 1
+    assert response.json()["detail"][0]["loc"] == expected_loc
 
 
-def test_list_receipts_limit_min(client: TestClient):
-    response = client.get("/receipts", params={"limit": 1})
-
-    assert response.status_code == 200
-
-
-def test_list_receipts_limit_max(client: TestClient):
-    response = client.get("/receipts", params={"limit": 100})
-
-    assert response.status_code == 200
-
-
-def test_list_receipts_offset_zero(client: TestClient):
-    response = client.get("/receipts", params={"offset": 0})
+@pytest.mark.parametrize(
+    "params",
+    [
+        pytest.param(
+            {"limit": 1},
+            id="limit_min",
+        ),
+        pytest.param(
+            {"limit": 100},
+            id="limit_max",
+        ),
+        pytest.param(
+            {"offset": 0},
+            id="offset_zero",
+        ),
+    ],
+)
+def test_list_receipts_valid_params(client: TestClient, params):
+    response = client.get("/receipts", params=params)
 
     assert response.status_code == 200
