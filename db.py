@@ -87,7 +87,7 @@ def fetch_receipts(
             SELECT id, shop, total, purchased_at
             FROM receipts
             ORDER BY purchased_at DESC, id DESC
-            limit %s offset %s
+            LIMIT %s OFFSET %s
             """,
             (limit, offset),
         )
@@ -117,16 +117,12 @@ def fetch_receipts(
         receipt_id = item_dict.pop("receipt_id")
         items_by_receipt[receipt_id].append(ItemOut(**item_dict))
 
-    list_receipts_obj: list[ReceiptOut] = []
+    result = [
+        ReceiptOut(**receipt_dict, items=items_by_receipt.get(receipt_dict["id"], []))
+        for receipt_dict in receipts_dicts
+    ]
 
-    for receipt_dict in receipts_dicts:
-        list_receipts_obj.append(
-            ReceiptOut(
-                **receipt_dict, items=items_by_receipt.get(receipt_dict["id"], [])
-            )
-        )
-
-    return list_receipts_obj
+    return result
 
 
 def fetch_categories(conn: psycopg.Connection) -> list[CategoryOut]:

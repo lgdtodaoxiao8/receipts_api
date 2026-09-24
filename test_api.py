@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 
-def test_ping(client):
+def test_ping(client: TestClient):
     response = client.get("/ping")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -9,35 +9,37 @@ def test_ping(client):
 
 def test_get_receipt(client: TestClient, make_receipt):
 
-    response = make_receipt(
+    created = make_receipt(
+        shop="Тест",
+        total=200,
         items=[
             {"name": "молоко", "price": 100},
             {"name": "хлеб", "price": 100},
         ],
     )
 
-    response_get = client.get(f"/receipts/{response['id']}")
+    response = client.get(f"/receipts/{created['id']}")
 
-    assert response_get.status_code == 200
+    assert response.status_code == 200
 
-    data = response_get.json()
+    data = response.json()
 
     assert data["shop"] == "Тест"
-    assert data["total"] == "100.00"
+    assert data["total"] == "200.00"
     assert [(item["name"], item["price"]) for item in data["items"]] == [
         ("молоко", "100.00"),
         ("хлеб", "100.00"),
     ]
 
 
-def test_get_receipt_not_found(client):
+def test_get_receipt_not_found(client: TestClient):
     response = client.get("/receipts/999")
 
     assert response.status_code == 404
     assert "detail" in response.json()
 
 
-def test_receipts_list(client, make_receipt):
+def test_receipts_list(client: TestClient, make_receipt):
     make_receipt(shop="первый")
     make_receipt(shop="второй")
 
@@ -50,7 +52,7 @@ def test_receipts_list(client, make_receipt):
     assert shops == ["второй", "первый"]
 
 
-def test_pagination(client, make_receipt):
+def test_pagination(client: TestClient, make_receipt):
 
     make_receipt(shop="первый")
     make_receipt(shop="второй")
@@ -78,7 +80,7 @@ def test_pagination(client, make_receipt):
     assert [row["shop"] for row in second_page.json()] == ["первый"]
 
 
-def test_create_receipt_empty_items(client):
+def test_create_receipt_empty_items(client: TestClient):
     response = client.post(
         "/receipts",
         json={
@@ -91,7 +93,7 @@ def test_create_receipt_empty_items(client):
     assert response.status_code == 422
 
 
-def test_receipt_total_not_number(client):
+def test_create_receipt_total_not_number(client: TestClient):
 
     response = client.post(
         "/receipts",
@@ -105,7 +107,7 @@ def test_receipt_total_not_number(client):
     assert response.status_code == 422
 
 
-def test_create_receipt(client):
+def test_create_receipt(client: TestClient):
     response = client.post(
         "/receipts",
         json={
@@ -129,7 +131,7 @@ def test_create_receipt(client):
     assert data["id"] > 0
 
 
-def test_extra_field(client):
+def test_create_receipt_item_extra_field(client: TestClient):
 
     response = client.post(
         "/receipts",
@@ -144,7 +146,7 @@ def test_extra_field(client):
     assert response.status_code == 422
 
 
-def test_empty_name(client):
+def test_create_receipt_blank_name(client: TestClient):
 
     response = client.post(
         "/receipts",
@@ -156,7 +158,7 @@ def test_empty_name(client):
     assert response.status_code == 422
 
 
-def test_negative_total(client):
+def test_create_receipt_negative_total(client: TestClient):
 
     response = client.post(
         "/receipts",
@@ -167,3 +169,96 @@ def test_negative_total(client):
     )
 
     assert response.status_code == 422
+
+
+def test_create_receipt_item_price_not_number(client: TestClient):
+
+    response = client.post(
+        "/receipts",
+        json={
+            "items": [{"name": "name", "price": "дорого"}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
+
+
+def test_create_receipt_item_zero_price(client: TestClient):
+
+    response = client.post(
+        "/receipts",
+        json={
+            "items": [{"name": "name", "price": 0}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
+
+
+def test_create_receipt_item_negative_price(client: TestClient):
+
+    response = client.post(
+        "/receipts",
+        json={
+            "items": [{"name": "name", "price": -100}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "items", 0, "price"]
+
+
+def test_create_receipt_extra_field(client: TestClient):
+
+    response = client.post(
+        "/receipts",
+        json={
+            "лишнее": 1,
+            "items": [{"name": "молоко", "price": 100}]
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "лишнее"]
+
+
+def test_list_receipts_limit_zero(client: TestClient):
+
+    response = client.get("/receipts", params={"limit": 0})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "limit"]
+
+
+def test_list_receipts_limit_too_big(client: TestClient):
+    response = client.get("/receipts", params={"limit": 101})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "limit"]
+
+
+def test_list_receipts_negative_offset(client: TestClient):
+    response = client.get("/receipts", params={"offset": -1})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "offset"]
+
+
+def test_list_receipts_limit_min(client: TestClient):
+    response = client.get("/receipts", params={"limit": 1})
+
+    assert response.status_code == 200
+
+
+def test_list_receipts_limit_max(client: TestClient):
+    response = client.get("/receipts", params={"limit": 100})
+
+    assert response.status_code == 200
+
+
+def test_list_receipts_offset_zero(client: TestClient):
+    response = client.get("/receipts", params={"offset": 0})
+
+    assert response.status_code == 200

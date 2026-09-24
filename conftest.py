@@ -2,12 +2,11 @@ import os
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-from fastapi.testclient import TestClient
-
-from api import app  # noqa:
+from api import app
 
 
 @pytest.fixture

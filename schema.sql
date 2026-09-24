@@ -19,7 +19,7 @@ CREATE TABLE categories (
 
 CREATE TABLE items (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL CHECK (length(name) > 0),
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
     price NUMERIC(10,2) NOT NULL CHECK (price > 0),
     receipt_id INTEGER NOT NULL REFERENCES receipts(id),
     category_id INTEGER REFERENCES categories(id)
