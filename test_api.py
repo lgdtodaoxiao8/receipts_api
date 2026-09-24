@@ -221,3 +221,55 @@ def test_list_receipts_valid_params(client: TestClient, params):
     response = client.get("/receipts", params=params)
 
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "total, expected_discrepancy",
+    [
+        pytest.param(650, "0.00", id="total_match"),
+        pytest.param(1000, "-350.00", id="total_greater"),
+        pytest.param(500, "150.00", id="total_less"),
+    ],
+)
+def test_receipt_discrepancy(
+    client: TestClient, make_receipt, total, expected_discrepancy
+):
+    created = make_receipt(
+        total=total,
+        items=[
+            {"name": "молоко", "price": 450},
+            {"name": "хлеб", "price": 200},
+        ],
+    )
+
+    response = client.get(f"/receipts/{created['id']}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["calculated_total"] == "650.00"
+    assert data["discrepancy"] == expected_discrepancy
+
+
+def test_receipt_discrepancy_no_totals(client: TestClient):
+
+    created = client.post(
+        "/receipts",
+        json={
+            "items": [
+                {"name": "молоко", "price": 450},
+            ]
+        },
+    )
+
+    assert created.status_code == 201
+
+    response = client.get(f"/receipts/{created.json()['id']}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["calculated_total"] == "450.00"
+    assert data["discrepancy"] is None
