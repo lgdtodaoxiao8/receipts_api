@@ -9,6 +9,12 @@ class CategoryOut(BaseModel):
     name: str
 
 
+class CategoryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+
+
 class ItemIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

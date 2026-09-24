@@ -273,3 +273,41 @@ def test_receipt_discrepancy_no_totals(client: TestClient):
 
     assert data["calculated_total"] == "450.00"
     assert data["discrepancy"] is None
+
+
+def test_create_category(client: TestClient):
+
+    response = client.post(
+        "/categories",
+        json={"name": "тест"},
+    )
+
+    data = response.json()
+
+    assert response.status_code == 201
+    assert data["name"] == "тест"
+    assert data["id"] > 0
+
+
+def test_create_category_blank_name(client: TestClient):
+
+    response = client.post(
+        "/categories",
+        json={"name": "   "},
+    )
+
+    assert response.status_code == 422
+    assert len(response.json()["detail"]) == 1
+    assert response.json()["detail"][0]["loc"] == ["body", "name"]
+
+
+def test_create_category_duplicate(client: TestClient, make_category):
+    make_category(name="тест")
+
+    response = client.post(
+        "/categories",
+        json={"name": "тест"},
+    )
+
+    assert response.status_code == 409
+    assert "detail" in response.json()

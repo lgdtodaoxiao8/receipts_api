@@ -125,6 +125,25 @@ def fetch_receipts(
     return result
 
 
+def save_category(conn: psycopg.Connection, name: str) -> CategoryOut:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            INSERT INTO categories (name)
+            VALUES (%s)
+            RETURNING id, name
+            """,
+            (name,),
+        )
+
+        created = cur.fetchone()
+
+    if created is None:
+        raise RuntimeError("INSERT не вернул строку")
+
+    return CategoryOut(**created)
+
+
 def fetch_categories(conn: psycopg.Connection) -> list[CategoryOut]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT id, name FROM categories ORDER BY id")

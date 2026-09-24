@@ -22,13 +22,27 @@ def clean_db():
 
 
 @pytest.fixture
-def make_receipt(client):
+def make_receipt(client: TestClient):
     def _make(shop="Тест", total=100, items=None):
         if items is None:
             items = [{"name": "товар", "price": 100}]
         response = client.post(
             "/receipts", json={"shop": shop, "total": total, "items": items}
         )
+        assert response.status_code == 201
+        return response.json()
+
+    return _make
+
+
+@pytest.fixture
+def make_category(client: TestClient):
+    def _make(name="Тест"):
+        response = client.post(
+            "/categories",
+            json={"name": name},
+        )
+
         assert response.status_code == 201
         return response.json()
 

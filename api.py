@@ -1,10 +1,17 @@
 import os
 
+import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
 
-from db import fetch_categories, fetch_receipt, fetch_receipts, save_receipt
-from models import CategoryOut, ReceiptIn, ReceiptOut
+from db import (
+    fetch_categories,
+    fetch_receipt,
+    fetch_receipts,
+    save_category,
+    save_receipt,
+)
+from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -57,6 +64,19 @@ def get_receipt(receipt_id: int) -> ReceiptOut:
 @app.get("/ping")
 def ping() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post(
+    "/categories",
+    status_code=201,
+    responses={409: {"description": "категория уже существует"}},
+)
+def create_category(category: CategoryIn) -> CategoryOut:
+    with pool.connection() as conn:
+        try:
+            return save_category(conn=conn, name=category.name)
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(status_code=409, detail="категория уже существует")
 
 
 @app.get("/categories")
