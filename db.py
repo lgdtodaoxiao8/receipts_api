@@ -9,7 +9,7 @@ from models import CategoryOut, ItemOut, ReceiptOut
 
 def save_receipt(
     conn: psycopg.Connection,
-    items: list[tuple[str, Decimal]],
+    items: list[tuple[str, Decimal, int | None]],
     total: Decimal | None,
     shop: str | None,
 ) -> int:
@@ -31,12 +31,14 @@ def save_receipt(
 
         receipt_id = fetched_row[0]
 
-        items_values_list = [(name, price, receipt_id) for name, price in items]
+        items_values_list = [
+            (name, price, receipt_id, category_id) for name, price, category_id in items
+        ]
 
         cur.executemany(
             """
-            INSERT INTO items (name, price, receipt_id) 
-            VALUES (%s, %s, %s)
+            INSERT INTO items (name, price, receipt_id, category_id) 
+            VALUES (%s, %s, %s, %s)
             """,
             items_values_list,
         )
@@ -62,10 +64,11 @@ def fetch_receipt(conn: psycopg.Connection, receipt_id: int) -> ReceiptOut | Non
 
         cur.execute(
             """
-            SELECT name, price 
-            FROM items 
-            WHERE receipt_id = %s 
-            ORDER BY id
+            SELECT i.name, i.price, c.name AS category_name
+            FROM items i
+            LEFT JOIN categories c ON i.category_id = c.id
+            WHERE i.receipt_id = %s 
+            ORDER BY i.id
             """,
             (receipt_id,),
         )
@@ -101,10 +104,11 @@ def fetch_receipts(
 
         cur.execute(
             """
-            SELECT receipt_id, name, price
-            FROM items
-            WHERE receipt_id = ANY(%s)
-            ORDER BY receipt_id, id
+            SELECT i.receipt_id, i.name, i.price, c.name AS category_name
+            FROM items i
+            LEFT JOIN categories c ON i.category_id = c.id
+            WHERE i.receipt_id = ANY(%s)
+            ORDER BY i.receipt_id, i.id
             """,
             (receipts_ids,),
         )

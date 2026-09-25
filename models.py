@@ -20,11 +20,13 @@ class ItemIn(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     price: Decimal = Field(gt=0)
+    category_id: int | None = Field(default=None, gt=0)
 
 
 class ItemOut(BaseModel):
     name: str
     price: Decimal
+    category_name: str | None
 
 
 class ReceiptIn(BaseModel):

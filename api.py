@@ -23,14 +23,24 @@ pool = ConnectionPool(DATABASE_URL, open=True)
 app = FastAPI()
 
 
-@app.post("/receipts", status_code=201)
+@app.post(
+    "/receipts",
+    status_code=201,
+    responses={400: {"description": "указанной категории не существует"}},
+)
 def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
-    items = [(item.name, item.price) for item in receipt.items]
+    items = [(item.name, item.price, item.category_id) for item in receipt.items]
 
     with pool.connection() as conn:
-        receipt_id = save_receipt(
-            conn=conn, items=items, total=receipt.total, shop=receipt.shop
-        )
+        try:
+            receipt_id = save_receipt(
+                conn=conn, items=items, total=receipt.total, shop=receipt.shop
+            )
+        except psycopg.errors.ForeignKeyViolation:
+            raise HTTPException(
+                status_code=400,
+                detail="указанной категории не существует",
+            )
         created_receipt = fetch_receipt(conn=conn, receipt_id=receipt_id)
 
     if created_receipt is None:

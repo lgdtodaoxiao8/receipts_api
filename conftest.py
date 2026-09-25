@@ -24,8 +24,10 @@ def clean_db():
 @pytest.fixture
 def make_receipt(client: TestClient):
     def _make(shop="Тест", total=100, items=None):
+
         if items is None:
             items = [{"name": "товар", "price": 100}]
+
         response = client.post(
             "/receipts", json={"shop": shop, "total": total, "items": items}
         )

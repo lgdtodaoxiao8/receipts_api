@@ -311,3 +311,122 @@ def test_create_category_duplicate(client: TestClient, make_category):
 
     assert response.status_code == 409
     assert "detail" in response.json()
+
+
+def test_create_receipt_with_category(client: TestClient, make_category, make_receipt):
+    created_category = make_category(name="тест")
+
+    created_receipt = make_receipt(
+        items=[
+            {
+                "name": "молоко",
+                "price": 100,
+                "category_id": created_category["id"],
+            }
+        ]
+    )
+
+    response = client.get(f"/receipts/{created_receipt['id']}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data["items"]) == 1
+    assert data["items"][0]["category_name"] == "тест"
+
+    response_list = client.get("/receipts")
+
+    assert response_list.status_code == 200
+
+    data = response_list.json()
+
+    assert len(data) == 1
+    assert data[0]["id"] == created_receipt["id"]
+    assert len(data[0]["items"]) == 1
+    assert data[0]["items"][0]["category_name"] == "тест"
+
+
+def test_create_receipt_without_category(client: TestClient, make_receipt):
+    created_receipt = make_receipt()
+
+    response = client.get(f"/receipts/{created_receipt['id']}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data["items"]) == 1
+    assert data["items"][0]["category_name"] is None
+
+    response_list = client.get("/receipts")
+
+    assert response_list.status_code == 200
+
+    data = response_list.json()
+
+    assert len(data) == 1
+    assert data[0]["id"] == created_receipt["id"]
+    assert len(data[0]["items"]) == 1
+    assert data[0]["items"][0]["category_name"] is None
+
+
+def test_create_receipt_with_nonexistent_category(client: TestClient):
+
+    response = client.post(
+        "/receipts",
+        json={
+            "items": [
+                {
+                    "name": "молоко",
+                    "price": 100,
+                    "category_id": 999,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+
+def test_create_receipt_mixed_existence_category(
+    client: TestClient, make_category, make_receipt
+):
+    created_category = make_category(name="тест")
+
+    created_receipt = make_receipt(
+        items=[
+            {
+                "name": "молоко",
+                "price": 100,
+                "category_id": created_category["id"],
+            },
+            {
+                "name": "хлеб",
+                "price": 100,
+            },
+        ]
+    )
+
+    response = client.get(f"/receipts/{created_receipt['id']}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data["items"]) == 2
+    assert data["items"][0]["category_name"] == "тест"
+    assert data["items"][1]["category_name"] is None
+
+    response_list = client.get("/receipts")
+
+    assert response_list.status_code == 200
+
+    data = response_list.json()
+
+    assert len(data) == 1
+    assert data[0]["id"] == created_receipt["id"]
+    assert len(data[0]["items"]) == 2
+    assert data[0]["items"][0]["category_name"] == "тест"
+    assert data[0]["items"][1]["category_name"] is None
