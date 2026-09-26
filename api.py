@@ -3,6 +3,7 @@ import os
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
+from dotenv import load_dotenv
 
 from db import (
     fetch_categories,
@@ -13,10 +14,9 @@ from db import (
 )
 from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:secret@localhost:5432/receipts",
-)
+load_dotenv()
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 pool = ConnectionPool(DATABASE_URL, open=True)
 

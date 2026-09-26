@@ -1,21 +1,20 @@
 """initial schema
 
 Revision ID: c3dedc88c41c
-Revises: 
+Revises:
 Create Date: 2026-09-25 21:20:52.980561
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
-revision: str = 'c3dedc88c41c'
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "c3dedc88c41c"
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -47,7 +46,6 @@ def upgrade() -> None:
 
     op.execute("CREATE INDEX idx_items_receipt_id ON items (receipt_id)")
     op.execute("CREATE INDEX idx_items_category_id ON items (category_id)")
-    
 
 
 def downgrade() -> None:
