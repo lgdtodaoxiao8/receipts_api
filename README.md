@@ -1,3 +1,5 @@
+[![CI](https://github.com/lgdtodaoxiao8/receipts_api/actions/workflows/ci.yml/badge.svg)](https://github.com/lgdtodaoxiao8/receipts_api/actions/workflows/ci.yml)
+
 [Русская версия](README.ru.md)
 
 # Receipts API
