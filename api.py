@@ -1,9 +1,9 @@
 import os
 
 import psycopg
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
-from dotenv import load_dotenv
 
 from db import (
     fetch_categories,
