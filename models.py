@@ -55,3 +55,9 @@ class ReceiptOut(BaseModel):
             return None
 
         return self.calculated_total - self.total
+
+
+class ReceiptTextIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=10, max_length=5000)

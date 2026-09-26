@@ -12,7 +12,8 @@ from db import (
     save_category,
     save_receipt,
 )
-from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut
+from llm import LLMServiceError, ReceiptParseError, parse_receipt_text
+from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut, ReceiptTextIn
 
 load_dotenv()
 
@@ -21,6 +22,28 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 pool = ConnectionPool(DATABASE_URL, open=True)
 
 app = FastAPI()
+
+
+@app.post(
+    "/receipts/parse",
+    responses={
+        422: {"description": "не удалось разобрать текст как чек"},
+        503: {"description": "сервис модели недоступен или вернул ошибку"},
+    },
+)
+async def parse_receipts(payload: ReceiptTextIn) -> ReceiptIn:
+    try:
+        response = await parse_receipt_text(payload.text)
+    except ReceiptParseError:
+        raise HTTPException(
+            status_code=422, detail="не удалось разобрать текст как чек"
+        )
+    except LLMServiceError:
+        raise HTTPException(
+            status_code=503, detail="сервис модели недоступен или вернул ошибку"
+        )
+    else:
+        return response
 
 
 @app.post(
