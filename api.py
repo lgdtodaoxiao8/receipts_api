@@ -31,7 +31,7 @@ app = FastAPI()
         503: {"description": "сервис модели недоступен или вернул ошибку"},
     },
 )
-async def parse_receipts(payload: ReceiptTextIn) -> ReceiptIn:
+async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
     try:
         response = await parse_receipt_text(payload.text)
     except ReceiptParseError:
