@@ -25,7 +25,7 @@ alembic upgrade head
 fastapi dev api.py
 ```
 
-`docker compose` brings up two databases: the main one on port 5432 and the test one on 5433. Alembic creates the tables in both, and the database address is read from the `.env` file. A template sits in `.env.example`; copy it and adjust the values if you need to.
+`docker compose` brings up two databases: the main one on port 5432 and the test one on 5433. Alembic creates the tables in both, and the database address is read from the `.env` file. Parsing receipts from text requires an OpenAI key, which is also read from `.env`. The rest of the endpoints work without it. A template sits in `.env.example`; copy it and adjust the values if you need to.
 
 Post-launch API documentation: http://127.0.0.1:8000/docs
 
@@ -45,6 +45,7 @@ The tests cover success scenarios, input validation, error codes, pagination, wo
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | /receipts/parse | Parse receipt text into a structure |
 | POST | /receipts | Create a receipt |
 | GET | /receipts | List of receipts with pagination |
 | GET | /receipts/{id} | Receipt by ID |
@@ -52,9 +53,34 @@ The tests cover success scenarios, input validation, error codes, pagination, wo
 | GET | /categories | List of categories |
 | GET | /ping | Health check |
 
-Response codes: 422 if the data fails validation, 404 for a receipt that does not exist, 409 when creating a category whose name is already taken, and 400 if an item refers to a category that is not there.
+Response codes: 422 if the data fails validation or the text cannot be parsed as a receipt, 404 for a receipt that does not exist, 409 when creating a category whose name is already taken, 400 if an item refers to a category that is not there, and 503 if the model service is unavailable.
 
 ## Examples
+
+Parsing text. The service sends the text to a language model and returns a structure without saving anything: the client checks the result first and then submits it through the regular `POST /receipts`.
+
+```json
+POST /receipts/parse
+
+{
+  "text": "magnum\nmilk 450\nbread 200\ntotal 650"
+}
+```
+
+```json
+200 OK
+
+{
+  "shop": "magnum",
+  "total": "650",
+  "items": [
+    {"name": "milk", "price": "450", "category_id": null},
+    {"name": "bread", "price": "200", "category_id": null}
+  ]
+}
+```
+
+If the text does not look like a receipt, the response is 422. If the model service did not answer, it is 503.
 
 Creating a receipt. The `category_id` field on an item is optional: you can set it if the category you need has already been created through `POST /categories`, or you can leave it out entirely.
 
@@ -118,9 +144,11 @@ Line items are read through a `LEFT JOIN` with the categories, so an item withou
 
 **Connection pool.** Establishing a connection to Postgres takes tens of milliseconds, while the query itself takes about a millisecond. This means almost the entire response time would be consumed by the connection process, and under load the database would not be able to handle the influx of new processes. A pool maintains ready-made connections: a query takes a free one, does its work, and returns it.
 
+**Handling external service failures.** Calls to the language model can fail in various ways: timeouts, rate limit exceedances, server-side errors, or responses in unexpected formats. All these scenarios are mapped to two custom exceptions: one indicating a failure to parse the text, and the other indicating that the service is unavailable. For the client, these translate into 422 and 503 status codes, respectively, allowing them to identify the cause and determine whether to retry the request. The request itself is executed asynchronously, enabling the handler to process other requests while awaiting a response from the model service.
+
 ## On the agenda
 
-Parsing receipt text using a language model, automatic category detection, and caching in Redis.
+Automatic category detection, and caching in Redis.
 
 ## License
 

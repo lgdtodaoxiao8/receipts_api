@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
-from api import LLMServiceError, ReceiptParseError
+from llm import LLMServiceError, ReceiptParseError
 from models import ItemIn, ReceiptIn
 
 
@@ -499,14 +499,19 @@ def test_parse_receipt_service_error(client: TestClient, monkeypatch):
     )
 
     assert response.status_code == 503
+
     assert "detail" in response.json()
     assert response.json()["detail"] == "сервис модели недоступен или вернул ошибку"
 
 
 def test_parse_receipt_string_too_short_error(client: TestClient):
 
-    response = client.post("/receipts/parse", json={"test": "abc"})
+    response = client.post("/receipts/parse", json={"text": "abc"})
 
     assert response.status_code == 422
-    assert "detail" in response.json()
-    assert response.json()["detail"][0]["loc"] == ["body", "text"]
+
+    data = response.json()
+
+    assert "detail" in data
+    assert len(data["detail"]) == 1
+    assert data["detail"][0]["type"] == "string_too_short"
