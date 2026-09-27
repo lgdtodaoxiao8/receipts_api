@@ -1,8 +1,10 @@
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
-from models import ReceiptIn, ItemIn
-from decimal import Decimal
-from api import ReceiptParseError, LLMServiceError
+
+from api import LLMServiceError, ReceiptParseError
+from models import ItemIn, ReceiptIn
 
 
 def test_ping(client: TestClient):
@@ -438,14 +440,23 @@ def test_create_receipt_mixed_existence_category(
 async def fake_parse(text: str) -> ReceiptIn:
     return ReceiptIn(
         shop="Магнум",
-        total=Decimal("650"),
-        items=[ItemIn(name="молоко", price=Decimal("450"),)],
+        total=Decimal(650),
+        items=[
+            ItemIn(
+                name="молоко",
+                price=Decimal(450),
+            )
+        ],
     )
+
 
 def test_parse_receipt(client: TestClient, monkeypatch):
     monkeypatch.setattr("api.parse_receipt_text", fake_parse)
 
-    response = client.post("/receipts/parse", json={"text": "Магнум молоко 450 итог 650"},)
+    response = client.post(
+        "/receipts/parse",
+        json={"text": "Магнум молоко 450 итог 650"},
+    )
 
     assert response.status_code == 200
 
@@ -461,10 +472,14 @@ def test_parse_receipt(client: TestClient, monkeypatch):
 async def fake_parse_error_parse(text: str) -> ReceiptIn:
     raise ReceiptParseError("тест")
 
+
 def test_parse_receipt_parse_error(client: TestClient, monkeypatch):
     monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_parse)
 
-    response = client.post("/receipts/parse", json={"text":"тестовый запрос"},)
+    response = client.post(
+        "/receipts/parse",
+        json={"text": "тестовый запрос"},
+    )
 
     assert response.status_code == 422
     assert "detail" in response.json()
@@ -474,11 +489,15 @@ def test_parse_receipt_parse_error(client: TestClient, monkeypatch):
 async def fake_parse_error_service(text: str) -> ReceiptIn:
     raise LLMServiceError("тест")
 
+
 def test_parse_receipt_service_error(client: TestClient, monkeypatch):
     monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_service)
-    
-    response = client.post("/receipts/parse", json={"text":"тестовый запрос"},)
-    
+
+    response = client.post(
+        "/receipts/parse",
+        json={"text": "тестовый запрос"},
+    )
+
     assert response.status_code == 503
     assert "detail" in response.json()
     assert response.json()["detail"] == "сервис модели недоступен или вернул ошибку"
@@ -491,4 +510,3 @@ def test_parse_receipt_string_too_short_error(client: TestClient):
     assert response.status_code == 422
     assert "detail" in response.json()
     assert response.json()["detail"][0]["loc"] == ["body", "text"]
-    
