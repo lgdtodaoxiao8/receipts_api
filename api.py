@@ -4,6 +4,7 @@ import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
+from starlette.concurrency import run_in_threadpool
 
 from db import (
     fetch_categories,
@@ -24,6 +25,12 @@ pool = ConnectionPool(DATABASE_URL, open=True)
 app = FastAPI()
 
 
+def read_categories():
+    with pool.connection() as conn:
+        categories = fetch_categories(conn=conn)
+    return categories
+
+
 @app.post(
     "/receipts/parse",
     responses={
@@ -32,8 +39,15 @@ app = FastAPI()
     },
 )
 async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
+
+    categories = await run_in_threadpool(read_categories)
+
+    categories_dict: dict[str, int] = {
+        category.name: category.id for category in categories
+    }
+
     try:
-        response = await parse_receipt_text(payload.text)
+        response = await parse_receipt_text(payload.text, categories=categories_dict)
     except ReceiptParseError:
         raise HTTPException(
             status_code=422, detail="не удалось разобрать текст как чек"

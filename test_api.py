@@ -437,20 +437,20 @@ def test_create_receipt_mixed_existence_category(
     assert data[0]["items"][1]["category_name"] is None
 
 
-async def fake_parse(text: str) -> ReceiptIn:
-    return ReceiptIn(
-        shop="Магнум",
-        total=Decimal(650),
-        items=[
-            ItemIn(
-                name="молоко",
-                price=Decimal(450),
-            )
-        ],
-    )
-
-
 def test_parse_receipt(client: TestClient, monkeypatch):
+
+    async def fake_parse(text: str, categories: dict[str, int]) -> ReceiptIn:
+        return ReceiptIn(
+            shop="Магнум",
+            total=Decimal(650),
+            items=[
+                ItemIn(
+                    name="молоко",
+                    price=Decimal(450),
+                )
+            ],
+        )
+
     monkeypatch.setattr("api.parse_receipt_text", fake_parse)
 
     response = client.post(
@@ -469,11 +469,13 @@ def test_parse_receipt(client: TestClient, monkeypatch):
     assert data["items"][0]["price"] == "450"
 
 
-async def fake_parse_error_parse(text: str) -> ReceiptIn:
-    raise ReceiptParseError("тест")
-
-
 def test_parse_receipt_parse_error(client: TestClient, monkeypatch):
+
+    async def fake_parse_error_parse(
+        text: str, categories: dict[str, int]
+    ) -> ReceiptIn:
+        raise ReceiptParseError("тест")
+
     monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_parse)
 
     response = client.post(
@@ -486,11 +488,13 @@ def test_parse_receipt_parse_error(client: TestClient, monkeypatch):
     assert response.json()["detail"] == "не удалось разобрать текст как чек"
 
 
-async def fake_parse_error_service(text: str) -> ReceiptIn:
-    raise LLMServiceError("тест")
-
-
 def test_parse_receipt_service_error(client: TestClient, monkeypatch):
+
+    async def fake_parse_error_service(
+        text: str, categories: dict[str, int]
+    ) -> ReceiptIn:
+        raise LLMServiceError("тест")
+
     monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_service)
 
     response = client.post(
@@ -515,3 +519,29 @@ def test_parse_receipt_string_too_short_error(client: TestClient):
     assert "detail" in data
     assert len(data["detail"]) == 1
     assert data["detail"][0]["type"] == "string_too_short"
+
+
+def test_parse_receipt_passes_categories(
+    client: TestClient, monkeypatch, make_category
+):
+    created = make_category(name="еда")
+    received = {}
+
+    async def fake(text: str, categories: dict[str, int]) -> ReceiptIn:
+        received["categories"] = categories
+        return ReceiptIn(
+            shop="магнум",
+            items=[
+                ItemIn(
+                    name="молоко",
+                    price=Decimal(100),
+                    category_id=created["id"],
+                )
+            ],
+        )
+
+    monkeypatch.setattr("api.parse_receipt_text", fake)
+
+    client.post("/receipts/parse", json={"text": "магнум молоко 100"})
+
+    assert received["categories"] == {"еда": created["id"]}
