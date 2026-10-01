@@ -10,7 +10,7 @@ It addresses the challenge of manual expense tracking: instead of entering purch
 
 ## Stack
 
-Python 3.12, FastAPI, PostgreSQL, psycopg 3, Pydantic, Alembic, Docker, pytest.
+Python 3.12, FastAPI, PostgreSQL, Redis, psycopg 3, Pydantic, Alembic, Docker, pytest.
 
 ## Launching
 
@@ -25,7 +25,7 @@ alembic upgrade head
 fastapi dev api.py
 ```
 
-`docker compose` brings up two databases: the main one on port 5432 and the test one on 5433. Alembic creates the tables in both, and the database address is read from the `.env` file. Parsing receipts from text requires an OpenAI key, which is also read from `.env`. The rest of the endpoints work without it. A template sits in `.env.example`; copy it and adjust the values if you need to.
+`docker compose` brings up two databases, the main one on port 5432 and the test one on 5433, plus Redis on 6379. Alembic creates the tables in the databases, and the addresses of the database and Redis are read from the `.env` file. Parsing receipts from text requires an OpenAI key, which is also read from `.env`. The rest of the endpoints work without it. A template sits in `.env.example`; copy it and adjust the values if you need to.
 
 Post-launch API documentation: http://127.0.0.1:8000/docs
 
@@ -39,7 +39,7 @@ pytest
 
 The test database address is passed explicitly because `.env` holds the main one, while the schema has to be applied to both. The tests themselves take the address from `pytest.ini` and never reach the main database.
 
-The tests cover success scenarios, input validation, error codes, pagination, working with categories, and discrepancy calculation. The tables are cleared before every test, so neither the execution order nor repeated runs affect the result.
+The tests cover success scenarios, input validation, error codes, pagination, working with categories, and discrepancy calculation. Before every test the tables are cleared, and so is the cache: it lives in a separate Redis database, so the working one is left alone. Neither the execution order nor repeated runs affect the result.
 
 ## API
 
@@ -57,7 +57,7 @@ Response codes: 422 if the data fails validation or the text cannot be parsed as
 
 ## Examples
 
-Parsing text. The service sends the text to a language model and returns a structure without saving anything: the client checks the result first and then submits it through the regular `POST /receipts`.
+Parsing text. The service sends the text to a language model along with the list of existing categories and returns a structure without saving anything: the client checks the result first and then submits it through the regular `POST /receipts`. The model picks a category only from the list it was given, and sets null when none of them fit.
 
 ```json
 POST /receipts/parse
@@ -74,15 +74,15 @@ POST /receipts/parse
   "shop": "magnum",
   "total": "650",
   "items": [
-    {"name": "milk", "price": "450", "category_id": null},
-    {"name": "bread", "price": "200", "category_id": null}
+    {"name": "milk", "price": "450", "category_id": 1},
+    {"name": "bread", "price": "200", "category_id": 2}
   ]
 }
 ```
 
 If the text does not look like a receipt, the response is 422. If the model service did not answer, it is 503.
 
-Creating a receipt. The `category_id` field on an item is optional: you can set it if the category you need has already been created through `POST /categories`, or you can leave it out entirely.
+Creating a receipt. The `category_id` field on an item is optional: you can set it or leave it out. A default set of categories is inserted by a migration on first run, and your own are added through `POST /categories`.
 
 ```json
 POST /receipts
@@ -132,6 +132,8 @@ Three tables. `receipts` stores the receipt: purchase time, store, and stated to
 
 Line items are read through a `LEFT JOIN` with the categories, so an item without a category does not disappear from the response; its `category_name` is simply empty.
 
+The category list is populated by a migration during deployment: sixteen categories covering an ordinary supermarket receipt. They can be removed or extended through the API, and text parsing works with whatever is in the database at the time of the request.
+
 ## Technical solutions
 
 **NUMERIC instead of float for money.** The `float` type stores numbers in a binary representation, and some decimal fractions cannot be represented exactly in this format. This leads to the classic `0.1 + 0.2 = 0.30000000000000004`. While this may seem insignificant, the discrepancy accumulates into a noticeable error when processing a stream of transactions. The `NUMERIC` type stores decimal numbers precisely.
@@ -146,9 +148,13 @@ Line items are read through a `LEFT JOIN` with the categories, so an item withou
 
 **Handling external service failures.** Calls to the language model can fail in various ways: timeouts, rate limit exceedances, server-side errors, or responses in unexpected formats. All these scenarios are mapped to two custom exceptions: one indicating a failure to parse the text, and the other indicating that the service is unavailable. For the client, these translate into 422 and 503 status codes, respectively, allowing them to identify the cause and determine whether to retry the request. The request itself is executed asynchronously, enabling the handler to process other requests while awaiting a response from the model service.
 
+**Categories are picked from the existing reference list.** Letting the model name a category freely fills the list with synonyms such as food, groceries, nutrition and food products, which makes any statistics built on them meaningless. So the request carries the list of existing categories and the model picks only from those. An item that fits none of them is left without a category at all: a separate "other" entry would be indistinguishable from the case where detection simply failed.
+
+**Caching the parse.** A call to the model costs money and takes a few seconds, while the same text always parses the same way. The result goes into Redis for a day, keyed by a hash of the text together with the list of categories: once the reference list changes, the old parse is no longer valid, it still holds the previous identifiers. The lifetime is there for a different reason — the prompt and the model change over time, and a record that lives forever would eventually serve a parse made by rules the code no longer has. None of this is required for the service to work: when Redis is unavailable, it simply goes to the model and answers more slowly.
+
 ## On the agenda
 
-Automatic category detection, and caching in Redis.
+A spending summary by category over a period.
 
 ## License
 

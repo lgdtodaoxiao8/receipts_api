@@ -3,3 +3,4 @@ psycopg[binary,pool]
 pydantic
 alembic
 python-dotenv
+redis

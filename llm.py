@@ -117,7 +117,9 @@ async def parse_receipt_text(text: str, categories: dict[str, int]) -> ReceiptIn
                     category_id=category_id,
                 )
             )
+
         return ReceiptIn(total=data["total"], shop=data["shop"], items=items)
+
     except (ValidationError, KeyError, TypeError) as e:
         raise ReceiptParseError("не удалось разобрать текст как чек") from e
 

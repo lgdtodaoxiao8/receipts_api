@@ -1,11 +1,14 @@
 import os
 
 import psycopg
+import redis.exceptions
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from cache import get_cached_parse, set_cached_parse
 from db import (
     fetch_categories,
     fetch_receipt,
@@ -47,6 +50,16 @@ async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
     }
 
     try:
+        cached_response = await get_cached_parse(
+            text=payload.text, categories=categories_dict
+        )
+
+        if cached_response is not None:
+            return cached_response
+    except (redis.exceptions.RedisError, ValidationError):
+        pass
+
+    try:
         response = await parse_receipt_text(payload.text, categories=categories_dict)
     except ReceiptParseError:
         raise HTTPException(
@@ -57,6 +70,13 @@ async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
             status_code=503, detail="сервис модели недоступен или вернул ошибку"
         )
     else:
+        try:
+            await set_cached_parse(
+                text=payload.text, categories=categories_dict, receipt=response
+            )
+        except redis.exceptions.RedisError:
+            pass
+
         return response
 
 
