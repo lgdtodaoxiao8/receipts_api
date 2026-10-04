@@ -5,19 +5,20 @@ import redis.exceptions
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from psycopg_pool import ConnectionPool
-from pydantic import ValidationError
+from pydantic import AwareDatetime, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from cache import get_cached_parse, set_cached_parse
 from db import (
     fetch_categories,
+    fetch_categories_stats,
     fetch_receipt,
     fetch_receipts,
     save_category,
     save_receipt,
 )
 from llm import LLMServiceError, ReceiptParseError, parse_receipt_text
-from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut, ReceiptTextIn
+from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut, ReceiptTextIn, Stat
 
 load_dotenv()
 
@@ -91,7 +92,11 @@ def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
     with pool.connection() as conn:
         try:
             receipt_id = save_receipt(
-                conn=conn, items=items, total=receipt.total, shop=receipt.shop
+                conn=conn,
+                items=items,
+                total=receipt.total,
+                shop=receipt.shop,
+                purchased_at=receipt.purchased_at,
             )
         except psycopg.errors.ForeignKeyViolation:
             raise HTTPException(
@@ -104,6 +109,29 @@ def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
         raise RuntimeError("чек не найден сразу после создания")
 
     return created_receipt
+
+
+@app.get("/receipts/stats", responses={422: {"description": "указан неверный период"}})
+def list_categories_stats(
+    period_start: AwareDatetime | None = None,
+    period_end: AwareDatetime | None = None,
+) -> list[Stat]:
+
+    if (
+        period_start is not None
+        and period_end is not None
+        and period_end < period_start
+    ):
+        raise HTTPException(422, detail="указан неверный период")
+
+    with pool.connection() as conn:
+        result = fetch_categories_stats(
+            conn=conn,
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+    return result
 
 
 @app.get("/receipts")
@@ -147,7 +175,7 @@ def create_category(category: CategoryIn) -> CategoryOut:
 
 
 @app.get("/categories")
-def categories() -> list[CategoryOut]:
+def list_categories() -> list[CategoryOut]:
     with pool.connection() as conn:
         result = fetch_categories(conn=conn)
 

@@ -48,12 +48,13 @@ The tests cover success scenarios, input validation, error codes, pagination, wo
 | POST | /receipts/parse | Parse receipt text into a structure |
 | POST | /receipts | Create a receipt |
 | GET | /receipts | List of receipts with pagination |
+| GET | /receipts/stats | Spending summary by category over a period |
 | GET | /receipts/{id} | Receipt by ID |
 | POST | /categories | Create a category |
 | GET | /categories | List of categories |
 | GET | /ping | Health check |
 
-Response codes: 422 if the data fails validation or the text cannot be parsed as a receipt, 404 for a receipt that does not exist, 409 when creating a category whose name is already taken, 400 if an item refers to a category that is not there, and 503 if the model service is unavailable.
+Response codes: 422 if the data fails validation, the text cannot be parsed as a receipt, or the period bounds come without a time zone or end before they start; 404 for a receipt that does not exist; 409 when creating a category whose name is already taken; 400 if an item refers to a category that is not there; and 503 if the model service is unavailable.
 
 ## Examples
 
@@ -83,6 +84,7 @@ POST /receipts/parse
 If the text does not look like a receipt, the response is 422. If the model service did not answer, it is 503.
 
 Creating a receipt. The `category_id` field on an item is optional: you can set it or leave it out. A default set of categories is inserted by a migration on first run, and your own are added through `POST /categories`.
+The time of purchase can be passed in the `purchased_at` field, with a time zone required. Leave it out and the time the record was created is used instead, so for receipts from earlier days it is better to state it.
 
 ```json
 POST /receipts
@@ -90,6 +92,7 @@ POST /receipts
 {
   "shop": "Magnum",
   "total": 650,
+  "purchased_at": "2026-09-26T19:12:03Z",
   "items": [
     {"name": "milk", "price": 450, "category_id": 1},
     {"name": "bread", "price": 200}
@@ -106,7 +109,7 @@ The response contains the saved receipt. The category name is substituted for it
   "id": 1,
   "shop": "Magnum",
   "total": "650.00",
-  "purchased_at": "2026-09-26T19:12:03.481220Z",
+  "purchased_at": "2026-09-26T19:12:03Z",
   "items": [
     {"name": "milk", "price": "450.00", "category_name": "food"},
     {"name": "bread", "price": "200.00", "category_name": null}
@@ -124,6 +127,24 @@ The list of receipts is returned in pages; the size and the offset are set by th
 GET /receipts?limit=20&offset=0
 ```
 
+Spending summary. Groups items by category over a period and sorts by amount. The bounds are optional; without them everything is counted over all time.
+
+```
+GET /receipts/stats?period_start=2026-09-01T00:00:00Z&period_end=2026-10-01T00:00:00Z
+```
+
+```json
+200 OK
+
+[
+  {"category_name": "food", "total_expenses": "12400.00", "items_count": 23},
+  {"category_name": "drinks", "total_expenses": "3200.00", "items_count": 8},
+  {"category_name": null, "total_expenses": "750.00", "items_count": 3}
+]
+```
+
+The start of the period is included, the end is not. That way neighbouring periods do not overlap and a receipt on the boundary is not counted in both. Items without a category come as their own row, with `category_name` set to `null`.
+
 ## Data schema
 
 Three tables. `receipts` stores the receipt: purchase time, store, and stated total.
@@ -140,7 +161,7 @@ The category list is populated by a migration during deployment: sixteen categor
 
 **Two queries instead of a JOIN when reading a list.** The straightforward approach is to request a list of receipts and then, in a loop, query the line items for each one; for twenty receipts, this results in twenty-one database queries, the N+1 problem. Here, only two queries are made regardless of the number of receipts: first for the receipts, then for the line items of all those receipts at once using `ANY`, followed by grouping by `receipt_id` in Python. A single query with a `JOIN` isn't suitable either: receipt data would be duplicated in every row, and the nested structure would have to be assembled manually.
 
-**TIMESTAMPTZ instead of TIMESTAMP.** It stores a point in time in UTC and returns it in the requester's time zone. A TIMESTAMP simply stores the numbers on the clock face without a time zone reference; consequently, two moments from different time zones become indistinguishable, and time-based sorting can break.
+**TIMESTAMPTZ instead of TIMESTAMP.** It stores a point in time in UTC and returns it in the requester's time zone. A TIMESTAMP simply stores the numbers on the clock face without a time zone reference; consequently, two moments from different time zones become indistinguishable, and time-based sorting can break. For the same reason both the time of purchase and the period bounds in the summary are only accepted with an explicit time zone: without one the moment is undefined, and the database fills it in from the connection's setting, which would make the result depend on the server's configuration rather than on the data sent.
 
 **Two-level validation.** Pydantic filters out invalid data at the API boundary and returns a 422 response to the client, specifying the exact field involved. Meanwhile, database CHECK constraints ensure that no garbage data enters the tables by any means, including direct writes via scripts or psql.
 
@@ -152,9 +173,11 @@ The category list is populated by a migration during deployment: sixteen categor
 
 **Caching the parse.** A call to the model costs money and takes a few seconds, while the same text always parses the same way. The result goes into Redis for a day, keyed by a hash of the text together with the list of categories: once the reference list changes, the old parse is no longer valid, it still holds the previous identifiers. The lifetime is there for a different reason — the prompt and the model change over time, and a record that lives forever would eventually serve a parse made by rules the code no longer has. None of this is required for the service to work: when Redis is unavailable, it simply goes to the model and answers more slowly.
 
+**Index for time-based filtering.** The summary selects receipts based on `purchased_at`, and the list of receipts is sorted by the same column. Without an index, the database reads the entire table and checks every row in both cases; while this is imperceptible with a thousand receipts, it takes seconds with a million. An index keeps the column values ​​sorted, allowing the required range to be located by traversing the tree, after which the data is read sequentially. The trade-off is disk space and slightly slower insertions, as every new receipt must be written to the index.
+
 ## On the agenda
 
-A spending summary by category over a period.
+Per-user data separation and authentication.
 
 ## License
 

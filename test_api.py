@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -545,3 +546,161 @@ def test_parse_receipt_passes_categories(
     client.post("/receipts/parse", json={"text": "магнум молоко 100"})
 
     assert received["categories"] == {"еда": created["id"]}
+
+
+def test_get_stats(client: TestClient, make_category, make_receipt):
+    first_category_id = make_category(name="первая")["id"]
+    second_category_id = make_category(name="вторая")["id"]
+
+    make_receipt(
+        shop="тест",
+        total=100,
+        items=[
+            {"name": "тест", "price": 333, "category_id": first_category_id},
+            {"name": "тест", "price": 333, "category_id": first_category_id},
+            {"name": "тест", "price": 333, "category_id": first_category_id},
+            {"name": "тест", "price": 1000, "category_id": second_category_id},
+            {"name": "тест", "price": 1000, "category_id": second_category_id},
+            {"name": "тест", "price": 50},
+            {"name": "тест", "price": 50},
+        ],
+    )
+
+    response = client.get("/receipts/stats")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data) == 3
+    assert data[0]["category_name"] == "вторая"
+    assert data[1]["category_name"] == "первая"
+    assert data[2]["category_name"] is None
+
+    assert data[0]["total_expenses"] == "2000.00"
+    assert data[1]["total_expenses"] == "999.00"
+    assert data[2]["total_expenses"] == "100.00"
+
+    assert data[0]["items_count"] == 2
+    assert data[1]["items_count"] == 3
+    assert data[2]["items_count"] == 2
+
+
+def test_get_stats_by_period(client: TestClient, make_category, make_receipt):
+    created_category_id = make_category(name="тест")["id"]
+
+    make_receipt(
+        shop="тест",
+        total=100,
+        items=[
+            {"name": "тест", "price": 333, "category_id": created_category_id},
+        ],
+        purchased_at=datetime(2026, 9, 25, tzinfo=timezone.utc).isoformat(),
+    )
+
+    response_not_include = client.get(
+        "/receipts/stats",
+        params={
+            "period_start": datetime(2026, 9, 24, tzinfo=timezone.utc).isoformat(),
+            "period_end": datetime(2026, 9, 25, tzinfo=timezone.utc).isoformat(),
+        },
+    )
+
+    assert response_not_include.status_code == 200
+
+    data = response_not_include.json()
+
+    assert len(data) == 0
+    assert not data
+
+    response_include = client.get(
+        "/receipts/stats",
+        params={
+            "period_start": datetime(2026, 9, 24, tzinfo=timezone.utc).isoformat(),
+            "period_end": datetime(2026, 9, 25, 23, tzinfo=timezone.utc).isoformat(),
+        },
+    )
+
+    assert response_include.status_code == 200
+
+    data = response_include.json()
+
+    assert len(data) == 1
+
+    assert data[0]["category_name"] == "тест"
+    assert data[0]["total_expenses"] == "333.00"
+    assert data[0]["items_count"] == 1
+
+
+def test_get_stats_wrong_period(client: TestClient):
+    response = client.get(
+        "/receipts/stats",
+        params={
+            "period_start": datetime.now(timezone.utc).isoformat(),
+            "period_end": (datetime.now(timezone.utc) - timedelta(1)).isoformat(),
+        },
+    )
+
+    assert response.status_code == 422
+
+    assert "detail" in response.json()
+    assert response.json()["detail"] == "указан неверный период"
+
+
+def test_get_stats_period_without_timezone(client: TestClient):
+    response = client.get(
+        "/receipts/stats",
+        params={
+            "period_start": datetime.now().isoformat(),  # noqa: DTZ005
+            "period_end": (datetime.now() - timedelta(1)).isoformat(),  # noqa: DTZ005
+        },
+    )
+
+    assert response.status_code == 422
+
+    data = response.json()
+
+    assert "detail" in data
+    assert len(data["detail"]) == 2
+    assert data["detail"][0]["loc"] == ["query", "period_start"]
+    assert data["detail"][1]["loc"] == ["query", "period_end"]
+    assert data["detail"][0]["type"] == "timezone_aware"
+    assert data["detail"][1]["type"] == "timezone_aware"
+
+
+def test_get_stats_one_bound(client: TestClient, make_receipt):
+
+    make_receipt(purchased_at=datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat())
+    make_receipt(purchased_at=datetime(2026, 9, 1, tzinfo=timezone.utc).isoformat())
+
+    response_assert_one = client.get(
+        "/receipts/stats",
+        params={"period_start": datetime(2026, 8, 31, tzinfo=timezone.utc).isoformat()},
+    )
+
+    assert response_assert_one.status_code == 200
+    assert response_assert_one.json()[0]["items_count"] == 1
+
+    response_assert_two = client.get(
+        "/receipts/stats",
+        params={"period_start": datetime(2026, 4, 30, tzinfo=timezone.utc).isoformat()},
+    )
+
+    assert response_assert_two.status_code == 200
+    assert response_assert_two.json()[0]["items_count"] == 2
+
+    response_assert_one = client.get(
+        "/receipts/stats",
+        params={"period_end": datetime(2026, 8, 1, tzinfo=timezone.utc).isoformat()},
+    )
+
+    assert response_assert_one.status_code == 200
+    assert response_assert_one.json()[0]["items_count"] == 1
+
+    response_assert_two = client.get(
+        "/receipts/stats",
+        params={"period_end": datetime(2026, 10, 1, tzinfo=timezone.utc).isoformat()},
+    )
+
+    assert response_assert_two.status_code == 200
+    assert response_assert_two.json()[0]["items_count"] == 2

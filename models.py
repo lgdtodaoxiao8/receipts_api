@@ -1,12 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
 
 
 class CategoryOut(BaseModel):
     id: int
     name: str
+
+
+class Stat(BaseModel):
+    category_name: str | None
+    total_expenses: Decimal
+    items_count: int
 
 
 class CategoryIn(BaseModel):
@@ -34,6 +40,7 @@ class ReceiptIn(BaseModel):
     shop: str | None = Field(default=None, max_length=200)
     total: Decimal | None = Field(default=None, ge=0)
     items: list[ItemIn] = Field(min_length=1)
+    purchased_at: AwareDatetime | None = None
 
 
 class ReceiptOut(BaseModel):

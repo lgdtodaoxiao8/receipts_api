@@ -1,10 +1,11 @@
 from collections import defaultdict
+from datetime import datetime
 from decimal import Decimal
 
 import psycopg
 from psycopg.rows import dict_row
 
-from models import CategoryOut, ItemOut, ReceiptOut
+from models import CategoryOut, ItemOut, ReceiptOut, Stat
 
 
 def save_receipt(
@@ -12,16 +13,17 @@ def save_receipt(
     items: list[tuple[str, Decimal, int | None]],
     total: Decimal | None,
     shop: str | None,
+    purchased_at: datetime | None,
 ) -> int:
 
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO receipts (purchased_at, total, shop)
-            VALUES (now(), %s, %s)
+            VALUES (COALESCE(%s, now()), %s, %s)
             RETURNING id
             """,
-            (total, shop),
+            (purchased_at, total, shop),
         )
 
         fetched_row = cur.fetchone()
@@ -153,3 +155,30 @@ def fetch_categories(conn: psycopg.Connection) -> list[CategoryOut]:
         cur.execute("SELECT id, name FROM categories ORDER BY id")
         categories_dicts = cur.fetchall()
     return [CategoryOut(**category_dict) for category_dict in categories_dicts]
+
+
+def fetch_categories_stats(
+    conn: psycopg.Connection,
+    period_start: datetime | None,
+    period_end: datetime | None,
+) -> list[Stat]:
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT c.name AS category_name, sum(i.price) AS total_expenses, count(i.id) AS items_count
+            FROM items i
+            LEFT JOIN categories c on i.category_id = c.id
+            JOIN receipts r on i.receipt_id = r.id
+            WHERE (%s::timestamptz IS NULL OR r.purchased_at >= %s)
+            AND (%s::timestamptz IS NULL OR r.purchased_at < %s)
+            GROUP BY c.name
+            ORDER BY sum(i.price) DESC, c.name
+        """,
+            (period_start, period_start, period_end, period_end),
+        )
+        response = cur.fetchall()
+
+    list_stats = [Stat(**stat) for stat in response]
+
+    return list_stats

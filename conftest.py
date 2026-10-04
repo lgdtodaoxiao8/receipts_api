@@ -34,13 +34,19 @@ def clean_cache():
 
 @pytest.fixture
 def make_receipt(client: TestClient):
-    def _make(shop="Тест", total=100, items=None):
+    def _make(shop="Тест", total=100, items=None, purchased_at=None):
 
         if items is None:
             items = [{"name": "товар", "price": 100}]
 
         response = client.post(
-            "/receipts", json={"shop": shop, "total": total, "items": items}
+            "/receipts",
+            json={
+                "shop": shop,
+                "total": total,
+                "items": items,
+                "purchased_at": purchased_at,
+            },
         )
         assert response.status_code == 201
         return response.json()
