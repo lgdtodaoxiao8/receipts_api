@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -596,14 +596,14 @@ def test_get_stats_by_period(client: TestClient, make_category, make_receipt):
         items=[
             {"name": "тест", "price": 333, "category_id": created_category_id},
         ],
-        purchased_at=datetime(2026, 9, 25, tzinfo=timezone.utc).isoformat(),
+        purchased_at=datetime(2026, 9, 25, tzinfo=UTC).isoformat(),
     )
 
     response_not_include = client.get(
         "/receipts/stats",
         params={
-            "period_start": datetime(2026, 9, 24, tzinfo=timezone.utc).isoformat(),
-            "period_end": datetime(2026, 9, 25, tzinfo=timezone.utc).isoformat(),
+            "period_start": datetime(2026, 9, 24, tzinfo=UTC).isoformat(),
+            "period_end": datetime(2026, 9, 25, tzinfo=UTC).isoformat(),
         },
     )
 
@@ -617,8 +617,8 @@ def test_get_stats_by_period(client: TestClient, make_category, make_receipt):
     response_include = client.get(
         "/receipts/stats",
         params={
-            "period_start": datetime(2026, 9, 24, tzinfo=timezone.utc).isoformat(),
-            "period_end": datetime(2026, 9, 25, 23, tzinfo=timezone.utc).isoformat(),
+            "period_start": datetime(2026, 9, 24, tzinfo=UTC).isoformat(),
+            "period_end": datetime(2026, 9, 25, 23, tzinfo=UTC).isoformat(),
         },
     )
 
@@ -637,8 +637,8 @@ def test_get_stats_wrong_period(client: TestClient):
     response = client.get(
         "/receipts/stats",
         params={
-            "period_start": datetime.now(timezone.utc).isoformat(),
-            "period_end": (datetime.now(timezone.utc) - timedelta(1)).isoformat(),
+            "period_start": datetime.now(UTC).isoformat(),
+            "period_end": (datetime.now(UTC) - timedelta(1)).isoformat(),
         },
     )
 
@@ -652,8 +652,8 @@ def test_get_stats_period_without_timezone(client: TestClient):
     response = client.get(
         "/receipts/stats",
         params={
-            "period_start": datetime.now().isoformat(),  # noqa: DTZ005
-            "period_end": (datetime.now() - timedelta(1)).isoformat(),  # noqa: DTZ005
+            "period_start": datetime.now().isoformat(),
+            "period_end": (datetime.now() - timedelta(1)).isoformat(),
         },
     )
 
@@ -671,12 +671,12 @@ def test_get_stats_period_without_timezone(client: TestClient):
 
 def test_get_stats_one_bound(client: TestClient, make_receipt):
 
-    make_receipt(purchased_at=datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat())
-    make_receipt(purchased_at=datetime(2026, 9, 1, tzinfo=timezone.utc).isoformat())
+    make_receipt(purchased_at=datetime(2026, 5, 1, tzinfo=UTC).isoformat())
+    make_receipt(purchased_at=datetime(2026, 9, 1, tzinfo=UTC).isoformat())
 
     response_assert_one = client.get(
         "/receipts/stats",
-        params={"period_start": datetime(2026, 8, 31, tzinfo=timezone.utc).isoformat()},
+        params={"period_start": datetime(2026, 8, 31, tzinfo=UTC).isoformat()},
     )
 
     assert response_assert_one.status_code == 200
@@ -684,7 +684,7 @@ def test_get_stats_one_bound(client: TestClient, make_receipt):
 
     response_assert_two = client.get(
         "/receipts/stats",
-        params={"period_start": datetime(2026, 4, 30, tzinfo=timezone.utc).isoformat()},
+        params={"period_start": datetime(2026, 4, 30, tzinfo=UTC).isoformat()},
     )
 
     assert response_assert_two.status_code == 200
@@ -692,7 +692,7 @@ def test_get_stats_one_bound(client: TestClient, make_receipt):
 
     response_assert_one = client.get(
         "/receipts/stats",
-        params={"period_end": datetime(2026, 8, 1, tzinfo=timezone.utc).isoformat()},
+        params={"period_end": datetime(2026, 8, 1, tzinfo=UTC).isoformat()},
     )
 
     assert response_assert_one.status_code == 200
@@ -700,7 +700,7 @@ def test_get_stats_one_bound(client: TestClient, make_receipt):
 
     response_assert_two = client.get(
         "/receipts/stats",
-        params={"period_end": datetime(2026, 10, 1, tzinfo=timezone.utc).isoformat()},
+        params={"period_end": datetime(2026, 10, 1, tzinfo=UTC).isoformat()},
     )
 
     assert response_assert_two.status_code == 200

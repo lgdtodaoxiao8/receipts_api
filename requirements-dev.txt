@@ -3,4 +3,4 @@ pytest
 pytest-env
 httpx2
 mypy
-ruff
+ruff==<0.17.0>
