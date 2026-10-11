@@ -13,6 +13,10 @@ REDIS_URL = os.environ["REDIS_URL"]
 redis_client = redis.asyncio.from_url(REDIS_URL)
 
 
+async def close_cache() -> None:
+    await redis_client.aclose()
+
+
 def _cache_key(text: str, categories: dict[str, int]) -> str:
 
     sorted_categories = sorted(categories.items())

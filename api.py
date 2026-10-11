@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 import psycopg
 import redis.exceptions
@@ -8,7 +9,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import AwareDatetime, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from cache import get_cached_parse, set_cached_parse
+from cache import close_cache, get_cached_parse, set_cached_parse
 from db import (
     fetch_categories,
     fetch_categories_stats,
@@ -17,16 +18,29 @@ from db import (
     save_category,
     save_receipt,
 )
-from llm import LLMServiceError, ReceiptParseError, parse_receipt_text
+from llm import LLMClient, LLMServiceError, ReceiptParseError
 from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut, ReceiptTextIn, Stat
 
 load_dotenv()
+
+API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 pool = ConnectionPool(DATABASE_URL, open=True)
 
-app = FastAPI()
+llm_client = LLMClient(API_KEY, 30)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await llm_client.aclose()
+    await close_cache()
+    pool.close()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 def read_categories():
@@ -61,7 +75,9 @@ async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
         pass
 
     try:
-        response = await parse_receipt_text(payload.text, categories=categories_dict)
+        response = await llm_client.parse_receipt_text(
+            payload.text, categories=categories_dict
+        )
     except ReceiptParseError:
         raise HTTPException(
             status_code=422, detail="не удалось разобрать текст как чек"

@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+import api
 from llm import LLMServiceError, ReceiptParseError
 from models import ItemIn, ReceiptIn
 
@@ -452,7 +453,7 @@ def test_parse_receipt(client: TestClient, monkeypatch):
             ],
         )
 
-    monkeypatch.setattr("api.parse_receipt_text", fake_parse)
+    monkeypatch.setattr(api.llm_client, "parse_receipt_text", fake_parse)
 
     response = client.post(
         "/receipts/parse",
@@ -477,7 +478,7 @@ def test_parse_receipt_parse_error(client: TestClient, monkeypatch):
     ) -> ReceiptIn:
         raise ReceiptParseError("тест")
 
-    monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_parse)
+    monkeypatch.setattr(api.llm_client, "parse_receipt_text", fake_parse_error_parse)
 
     response = client.post(
         "/receipts/parse",
@@ -496,7 +497,7 @@ def test_parse_receipt_service_error(client: TestClient, monkeypatch):
     ) -> ReceiptIn:
         raise LLMServiceError("тест")
 
-    monkeypatch.setattr("api.parse_receipt_text", fake_parse_error_service)
+    monkeypatch.setattr(api.llm_client, "parse_receipt_text", fake_parse_error_service)
 
     response = client.post(
         "/receipts/parse",
@@ -541,7 +542,7 @@ def test_parse_receipt_passes_categories(
             ],
         )
 
-    monkeypatch.setattr("api.parse_receipt_text", fake)
+    monkeypatch.setattr(api.llm_client, "parse_receipt_text", fake)
 
     client.post("/receipts/parse", json={"text": "магнум молоко 100"})
 
