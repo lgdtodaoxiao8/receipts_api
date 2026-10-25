@@ -46,6 +46,7 @@ jobs:
       - name: Apply migrations
         env:
           DATABASE_URL: postgresql://postgres:secret@localhost:5433/receipts_test
+          JWT_SECRET: SCXrL4aJLKoasuZc-Q4iNaQytnoloS_yebRG08G-3Te
         run: alembic upgrade head
 
       - name: Lint

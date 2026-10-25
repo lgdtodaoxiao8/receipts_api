@@ -4,3 +4,5 @@ pydantic
 alembic
 python-dotenv
 redis
+argon2-cffi
+pyjwt

@@ -1,6 +1,6 @@
 -r requirements.txt
 pytest
 pytest-env
-httpx2
 mypy
 ruff==0.17.0
+httpx2

@@ -1,21 +1,18 @@
-import os
+from collections.abc import Iterator
 
 import psycopg
 import pytest
 import redis
 from fastapi.testclient import TestClient
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-
-REDIS_URL = os.environ["REDIS_URL"]
-
 from api import app
+from config import DATABASE_URL, REDIS_URL
 
 redis_client = redis.Redis.from_url(REDIS_URL)
 
 
 @pytest.fixture(scope="session")
-def client():
+def client() -> Iterator[TestClient]:
     with TestClient(app) as c:
         yield c
 
@@ -23,13 +20,44 @@ def client():
 @pytest.fixture(autouse=True)
 def clean_db():
     with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
-        cur.execute("TRUNCATE items, receipts, categories RESTART IDENTITY CASCADE")
+        cur.execute(
+            "TRUNCATE items, receipts, categories, users RESTART IDENTITY CASCADE"
+        )
     yield
 
 
 @pytest.fixture(autouse=True)
 def clean_cache():
     redis_client.flushdb()
+
+
+@pytest.fixture()
+def create_user(client: TestClient, clean_db):
+    def _make(
+        email: str | None = "example@mail.com",
+        password: str | None = "password-example",
+    ):
+
+        payload = {"email": email, "password": password}
+
+        assert client.post("/auth/register", json=payload).status_code == 201
+
+        login_response = client.post("/auth/login", json=payload)
+
+        assert login_response.status_code == 200
+
+        token = login_response.json()["access_token"]
+
+        return {"Authorization": f"Bearer {token}"}
+
+    return _make
+
+
+@pytest.fixture(autouse=True)
+def default_user(client: TestClient, create_user):
+    client.headers.update(create_user())
+    yield
+    client.headers.pop("Authorization", None)
 
 
 @pytest.fixture
