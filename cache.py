@@ -1,14 +1,9 @@
 import hashlib
-import os
 
 import redis.asyncio
-from dotenv import load_dotenv
 
+from config import REDIS_URL
 from models import ReceiptIn
-
-load_dotenv()
-
-REDIS_URL = os.environ["REDIS_URL"]
 
 redis_client = redis.asyncio.from_url(REDIS_URL)
 

@@ -78,14 +78,13 @@ class LLMClient:
                 self.URL, headers=self.headers, json=payload
             )
             response.raise_for_status()
-        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        except httpx.HTTPError as e:
             raise LLMServiceError("сервис модели недоступен или вернул ошибку") from e
 
-        content = response.json()["choices"][0]["message"]["content"]
-
         try:
+            content = response.json()["choices"][0]["message"]["content"]
             data = json.loads(content)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
             raise ReceiptParseError("не удалось разобрать текст как чек") from e
 
         items: list[ItemIn] = []
