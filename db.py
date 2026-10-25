@@ -5,7 +5,7 @@ from decimal import Decimal
 import psycopg
 from psycopg.rows import dict_row
 
-from models import CategoryOut, ItemOut, ReceiptOut, Stat
+from models import CategoryOut, ItemOut, ReceiptOut, Stat, UserLoginOut, UserOut
 
 
 def save_receipt(
@@ -14,16 +14,17 @@ def save_receipt(
     total: Decimal | None,
     shop: str | None,
     purchased_at: datetime | None,
+    user_id: int,
 ) -> int:
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO receipts (purchased_at, total, shop)
-            VALUES (COALESCE(%s, now()), %s, %s)
+            INSERT INTO receipts (purchased_at, total, shop, user_id)
+            VALUES (COALESCE(%s, now()), %s, %s, %s)
             RETURNING id
             """,
-            (purchased_at, total, shop),
+            (purchased_at, total, shop, user_id),
         )
 
         fetched_row = cur.fetchone()
@@ -48,15 +49,18 @@ def save_receipt(
     return receipt_id
 
 
-def fetch_receipt(conn: psycopg.Connection, receipt_id: int) -> ReceiptOut | None:
+def fetch_receipt(
+    conn: psycopg.Connection, receipt_id: int, user_id: int
+) -> ReceiptOut | None:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             SELECT id, purchased_at, total, shop
             FROM receipts
             WHERE id = %s
+            AND user_id = %s
             """,
-            (receipt_id,),
+            (receipt_id, user_id),
         )
 
         receipt_row = cur.fetchone()
@@ -83,7 +87,10 @@ def fetch_receipt(conn: psycopg.Connection, receipt_id: int) -> ReceiptOut | Non
 
 
 def fetch_receipts(
-    conn: psycopg.Connection, limit: int, offset: int
+    conn: psycopg.Connection,
+    limit: int,
+    offset: int,
+    user_id: int,
 ) -> list[ReceiptOut]:
 
     with conn.cursor(row_factory=dict_row) as cur:
@@ -91,10 +98,11 @@ def fetch_receipts(
             """
             SELECT id, shop, total, purchased_at
             FROM receipts
+            WHERE user_id = %s
             ORDER BY purchased_at DESC, id DESC
             LIMIT %s OFFSET %s
             """,
-            (limit, offset),
+            (user_id, limit, offset),
         )
 
         receipts_dicts = cur.fetchall()
@@ -161,6 +169,7 @@ def fetch_categories_stats(
     conn: psycopg.Connection,
     period_start: datetime | None,
     period_end: datetime | None,
+    user_id: int,
 ) -> list[Stat]:
 
     with conn.cursor(row_factory=dict_row) as cur:
@@ -172,13 +181,83 @@ def fetch_categories_stats(
             JOIN receipts r on i.receipt_id = r.id
             WHERE (%s::timestamptz IS NULL OR r.purchased_at >= %s)
             AND (%s::timestamptz IS NULL OR r.purchased_at < %s)
+            AND r.user_id = %s
             GROUP BY c.name
             ORDER BY sum(i.price) DESC, c.name
         """,
-            (period_start, period_start, period_end, period_end),
+            (period_start, period_start, period_end, period_end, user_id),
         )
         response = cur.fetchall()
 
     list_stats = [Stat(**stat) for stat in response]
 
     return list_stats
+
+
+def save_user(
+    conn: psycopg.Connection,
+    email: str,
+    password_hash: str,
+) -> UserOut:
+    email = email.lower()
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            INSERT INTO users (email, password_hash, created_at)
+            VALUES (%s, %s, now())
+            RETURNING id
+            """,
+            (email, password_hash),
+        )
+
+        response = cur.fetchone()
+
+        if response is None:
+            raise RuntimeError("INSERT не вернул id")
+
+        return UserOut(id=response["id"], email=email)
+
+
+def get_user_by_email(conn: psycopg.Connection, email: str) -> UserLoginOut:
+
+    email = email.lower()
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, password_hash
+            FROM users
+            WHERE email = %s
+            LIMIT 1
+            """,
+            (email,),
+        )
+
+        fetched_row = cur.fetchone()
+
+    if fetched_row is None:
+        raise LookupError("Пользователь с таким email не найден")
+
+    return UserLoginOut(**fetched_row)
+
+
+def get_user_by_id(conn: psycopg.Connection, user_id: int) -> UserOut:
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, email
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+
+        fetched_row = cur.fetchone()
+
+    if fetched_row is None:
+        raise LookupError("Пользователь с таким id не найден")
+
+    return UserOut(**fetched_row)

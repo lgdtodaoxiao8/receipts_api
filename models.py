@@ -1,7 +1,29 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, computed_field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+)
+
+
+class UserIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
+class UserLoginOut(BaseModel):
+    id: int
+    password_hash: str
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
 
 
 class CategoryOut(BaseModel):

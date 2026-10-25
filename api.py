@@ -1,39 +1,51 @@
-import os
 from contextlib import asynccontextmanager
 
 import psycopg
 import redis.exceptions
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from fastapi import FastAPI, Header, HTTPException, Query
+from jwt import ExpiredSignatureError, InvalidTokenError
 from psycopg_pool import ConnectionPool
 from pydantic import AwareDatetime, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from cache import close_cache, get_cached_parse, set_cached_parse
+from config import API_KEY, DATABASE_URL
 from db import (
     fetch_categories,
     fetch_categories_stats,
     fetch_receipt,
     fetch_receipts,
+    get_user_by_email,
+    get_user_by_id,
     save_category,
     save_receipt,
+    save_user,
 )
 from llm import LLMClient, LLMServiceError, ReceiptParseError
-from models import CategoryIn, CategoryOut, ReceiptIn, ReceiptOut, ReceiptTextIn, Stat
+from models import (
+    CategoryIn,
+    CategoryOut,
+    ReceiptIn,
+    ReceiptOut,
+    ReceiptTextIn,
+    Stat,
+    UserIn,
+    UserOut,
+)
+from security import TokenInfoError, create_access_token, decode_token
 
-load_dotenv()
+hasher = PasswordHasher()
 
-API_KEY = os.environ.get("OPENAI_API_KEY", "")
-
-DATABASE_URL = os.environ["DATABASE_URL"]
-
-pool = ConnectionPool(DATABASE_URL, open=True)
+pool = ConnectionPool(DATABASE_URL)
 
 llm_client = LLMClient(API_KEY, 30)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    pool.open()
     yield
     await llm_client.aclose()
     await close_cache()
@@ -41,6 +53,72 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def get_current_user_id(authorization: str | None) -> int:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="нет токена")
+
+    token = authorization.removeprefix("Bearer ")
+
+    try:
+        user_id = decode_token(token=token)
+    except (ExpiredSignatureError, InvalidTokenError, TokenInfoError):
+        raise HTTPException(status_code=401, detail="токен невалидный")
+
+    return user_id
+
+
+@app.get("/me", status_code=200)
+def me(authorization: str | None = Header(default=None)) -> UserOut:
+    user_id = get_current_user_id(authorization=authorization)
+    with pool.connection() as conn:
+        try:
+            response = get_user_by_id(conn=conn, user_id=user_id)
+        except LookupError:
+            raise HTTPException(status_code=401, detail="пользователь не найден")
+
+    return response
+
+
+@app.post(
+    "/auth/register",
+    status_code=201,
+    responses={409: {"description": "пользователь с такой почтой уже существует"}},
+)
+def create_user(user: UserIn) -> UserOut:
+    password_hash = hasher.hash(user.password)
+    with pool.connection() as conn:
+        try:
+            user_out = save_user(conn, email=user.email, password_hash=password_hash)
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(
+                status_code=409, detail="пользователь с такой почтой уже существует"
+            )
+
+    return user_out
+
+
+@app.post(
+    "/auth/login",
+    status_code=200,
+    responses={401: {"description": "неверный email или пароль"}},
+)
+def login_user(user: UserIn) -> dict[str, str]:
+    with pool.connection() as conn:
+        try:
+            fetched_user = get_user_by_email(conn=conn, email=user.email)
+        except LookupError:
+            raise HTTPException(status_code=401, detail="неверный email или пароль")
+
+    try:
+        hasher.verify(fetched_user.password_hash, user.password)
+    except VerifyMismatchError:
+        raise HTTPException(status_code=401, detail="неверный email или пароль")
+
+    token = create_access_token(user_id=fetched_user.id, duration_min=15)
+
+    return {"access_token": token, "token_type": "bearer"}
 
 
 def read_categories():
@@ -102,7 +180,13 @@ async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
     status_code=201,
     responses={400: {"description": "указанной категории не существует"}},
 )
-def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
+def create_receipt(
+    receipt: ReceiptIn,
+    authorization: str | None = Header(default=None),
+) -> ReceiptOut:
+
+    user_id = get_current_user_id(authorization=authorization)
+
     items = [(item.name, item.price, item.category_id) for item in receipt.items]
 
     with pool.connection() as conn:
@@ -113,13 +197,16 @@ def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
                 total=receipt.total,
                 shop=receipt.shop,
                 purchased_at=receipt.purchased_at,
+                user_id=user_id,
             )
         except psycopg.errors.ForeignKeyViolation:
             raise HTTPException(
                 status_code=400,
                 detail="указанной категории не существует",
             )
-        created_receipt = fetch_receipt(conn=conn, receipt_id=receipt_id)
+        created_receipt = fetch_receipt(
+            conn=conn, receipt_id=receipt_id, user_id=user_id
+        )
 
     if created_receipt is None:
         raise RuntimeError("чек не найден сразу после создания")
@@ -131,7 +218,10 @@ def create_receipt(receipt: ReceiptIn) -> ReceiptOut:
 def list_categories_stats(
     period_start: AwareDatetime | None = None,
     period_end: AwareDatetime | None = None,
+    authorization: str | None = Header(default=None),
 ) -> list[Stat]:
+
+    user_id = get_current_user_id(authorization=authorization)
 
     if (
         period_start is not None
@@ -142,9 +232,7 @@ def list_categories_stats(
 
     with pool.connection() as conn:
         result = fetch_categories_stats(
-            conn=conn,
-            period_start=period_start,
-            period_end=period_end,
+            conn=conn, period_start=period_start, period_end=period_end, user_id=user_id
         )
 
     return result
@@ -152,19 +240,31 @@ def list_categories_stats(
 
 @app.get("/receipts")
 def list_receipts(
-    limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    authorization: str | None = Header(default=None),
 ) -> list[ReceiptOut]:
 
+    user_id = get_current_user_id(authorization=authorization)
+
     with pool.connection() as conn:
-        result_list = fetch_receipts(conn=conn, limit=limit, offset=offset)
+        result_list = fetch_receipts(
+            conn=conn, limit=limit, offset=offset, user_id=user_id
+        )
 
     return result_list
 
 
 @app.get("/receipts/{receipt_id}", responses={404: {"description": "Чек не найден"}})
-def get_receipt(receipt_id: int) -> ReceiptOut:
+def get_receipt(
+    receipt_id: int,
+    authorization: str | None = Header(default=None),
+) -> ReceiptOut:
+
+    user_id = get_current_user_id(authorization=authorization)
+
     with pool.connection() as conn:
-        receipt = fetch_receipt(conn=conn, receipt_id=receipt_id)
+        receipt = fetch_receipt(conn=conn, receipt_id=receipt_id, user_id=user_id)
 
     if receipt is None:
         raise HTTPException(status_code=404, detail="чек не найден")
