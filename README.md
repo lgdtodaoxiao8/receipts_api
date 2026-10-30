@@ -4,15 +4,17 @@
 
 # Receipts API
 
-A purchase tracking service. It accepts a receipt containing a list of items, saves the data to PostgreSQL, allows items to be linked to spending categories, and calculates the discrepancy between the sum of the individual items and the total amount stated on the receipt.
+A service for tracking purchases. It takes a receipt with a list of items and stores it in PostgreSQL. Items can be linked to spending categories, and the service checks whether the items add up to the total printed on the receipt. You don't have to type a receipt in by hand: a language model can turn its text into structured data.
 
-It addresses the challenge of manual expense tracking: instead of entering purchases into a spreadsheet, you can send them to the API for subsequent analysis.
+Every user sees only their own receipts. You sign in with email and password, and after that requests carry a JWT.
+
+The idea is simple: instead of a spreadsheet you fill in manually, receipts go to the API, and you get a spending summary by category out of them.
 
 ## Stack
 
-Python 3.12, FastAPI, PostgreSQL, Redis, psycopg 3, Pydantic, Alembic, Docker, pytest.
+Python 3.12, FastAPI, PostgreSQL, Redis, psycopg 3, Pydantic, Alembic, PyJWT, argon2, Docker, pytest.
 
-## Launching
+## Running it
 
 ```bash
 git clone https://github.com/lgdtodaoxiao8/receipts_api.git
@@ -25,40 +27,96 @@ alembic upgrade head
 fastapi dev api.py
 ```
 
-`docker compose` brings up two databases, the main one on port 5432 and the test one on 5433, plus Redis on 6379. Alembic creates the tables in the databases, and the addresses of the database and Redis are read from the `.env` file. Parsing receipts from text requires an OpenAI key, which is also read from `.env`. The rest of the endpoints work without it. A template sits in `.env.example`; copy it and adjust the values if you need to.
+`docker compose` starts two databases, the main one on port 5432 and the test one on 5433, plus Redis on 6379. Alembic creates the tables. The app reads the database and Redis addresses from `.env`; there is a template in `.env.example`.
 
-Post-launch API documentation: http://127.0.0.1:8000/docs
-
-## Tests
+Before the first run, set `JWT_SECRET` in `.env`. It is the key that signs tokens. Don't leave it empty: anyone can forge a token signed with an empty key. You can generate one like this:
 
 ```bash
-pip install -r requirements-dev.txt
-DATABASE_URL="postgresql://postgres:secret@localhost:5433/receipts_test" alembic upgrade head
-pytest
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-The test database address is passed explicitly because `.env` holds the main one, while the schema has to be applied to both. The tests themselves take the address from `pytest.ini` and never reach the main database.
+Parsing receipt text needs an OpenAI key in `OPENAI_API_KEY`. Everything else works without it.
 
-The tests cover success scenarios, input validation, error codes, pagination, working with categories, and discrepancy calculation. Before every test the tables are cleared, and so is the cache: it lives in a separate Redis database, so the working one is left alone. Neither the execution order nor repeated runs affect the result.
+API docs once it's running: http://127.0.0.1:8000/docs
+
+## Authentication
+
+Register first:
+
+```json
+POST /auth/register
+
+{
+  "email": "user@mail.com",
+  "password": "my-password"
+}
+```
+
+```json
+201 Created
+
+{"id": 1, "email": "user@mail.com"}
+```
+
+Then sign in with the same credentials:
+
+```json
+POST /auth/login
+
+{
+  "email": "user@mail.com",
+  "password": "my-password"
+}
+```
+
+```json
+200 OK
+
+{"access_token": "eyJhbGciOi...", "token_type": "bearer"}
+```
+
+From then on, send the token in a header with every request:
+
+```
+Authorization: Bearer eyJhbGciOi...
+```
+
+A token lasts 15 minutes; after that you sign in again. `GET /me` returns the id and email of the token's owner.
+
+Emails are lowercased, so `User@Mail.com` and `user@mail.com` are the same account. An email can be up to 100 characters, a password from 8 to 128.
+
+In Swagger, protected endpoints have an `authorization` field. Put the whole string there, including the word `Bearer`.
 
 ## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /receipts/parse | Parse receipt text into a structure |
-| POST | /receipts | Create a receipt |
-| GET | /receipts | List of receipts with pagination |
-| GET | /receipts/stats | Spending summary by category over a period |
-| GET | /receipts/{id} | Receipt by ID |
-| POST | /categories | Create a category |
-| GET | /categories | List of categories |
-| GET | /ping | Health check |
+| Method | Path | Description | Token required |
+|--------|------|-------------|----------------|
+| POST | /auth/register | Register | no |
+| POST | /auth/login | Sign in, get a token | no |
+| GET | /me | Current user | yes |
+| POST | /receipts/parse | Parse receipt text into structured data | yes |
+| POST | /receipts | Create a receipt | yes |
+| GET | /receipts | Your receipts, paginated | yes |
+| GET | /receipts/stats | Your spending by category over a period | yes |
+| GET | /receipts/{id} | One of your receipts by id | yes |
+| POST | /categories | Create a category | yes |
+| GET | /categories | List categories | no |
+| GET | /ping | Health check | no |
 
-Response codes: 422 if the data fails validation, the text cannot be parsed as a receipt, or the period bounds come without a time zone or end before they start; 404 for a receipt that does not exist; 409 when creating a category whose name is already taken; 400 if an item refers to a category that is not there; and 503 if the model service is unavailable.
+Response codes:
+
+- 401: no token, a broken or expired token, wrong email or password at sign-in, or the token's user no longer exists;
+- 404: the receipt doesn't exist or belongs to someone else;
+- 409: the email is already registered, or a category with that name already exists;
+- 400: an item refers to a category that doesn't exist;
+- 422: the data failed validation, the text couldn't be parsed as a receipt, or the period bounds have no time zone or the end comes before the start;
+- 503: the model service is unavailable.
 
 ## Examples
 
-Parsing text. The service sends the text to a language model along with the list of existing categories and returns a structure without saving anything: the client checks the result first and then submits it through the regular `POST /receipts`. The model picks a category only from the list it was given, and sets null when none of them fit.
+All requests below are sent with the `Authorization` header.
+
+Parsing text. The service sends the text to a language model together with the list of existing categories and returns structured data. It doesn't save anything: the client looks at the result first and then sends it through the regular `POST /receipts`. The model only picks categories from the list it was given and uses null when none fit.
 
 ```json
 POST /receipts/parse
@@ -81,10 +139,11 @@ POST /receipts/parse
 }
 ```
 
-If the text does not look like a receipt, the response is 422. If the model service did not answer, it is 503.
+If the text doesn't look like a receipt, you get 422. If the model service didn't answer, 503.
 
-Creating a receipt. The `category_id` field on an item is optional: you can set it or leave it out. A default set of categories is inserted by a migration on first run, and your own are added through `POST /categories`.
-The time of purchase can be passed in the `purchased_at` field, with a time zone required. Leave it out and the time the record was created is used instead, so for receipts from earlier days it is better to state it.
+Creating a receipt. `category_id` on an item is optional. A default set of categories is added by a migration on first run, and you can add your own through `POST /categories`. The purchase time goes in `purchased_at` and must include a time zone. If you leave it out, the time the record was created is used, so for receipts from earlier days it's better to set it.
+
+You don't specify the receipt's owner; the service takes it from the token.
 
 ```json
 POST /receipts
@@ -100,7 +159,7 @@ POST /receipts
 }
 ```
 
-The response contains the saved receipt. The category name is substituted for its identifier, and two computed fields appear next to the stated total: `calculated_total`, the sum of the items, and `discrepancy`, the difference between that sum and the total. A positive value means the items together cost more than the receipt claims.
+The response is the saved receipt. Each item shows its category name instead of the id, and next to the receipt total there are two computed fields: `calculated_total`, the sum of the items, and `discrepancy`, the difference between that sum and the total. A positive `discrepancy` means the items together cost more than the receipt says.
 
 ```json
 201 Created
@@ -119,15 +178,15 @@ The response contains the saved receipt. The category name is substituted for it
 }
 ```
 
-If the receipt has no stated total, `discrepancy` comes back as `null`: there is nothing to compare against.
+If the receipt has no total, `discrepancy` is `null`, since there's nothing to compare against.
 
-The list of receipts is returned in pages; the size and the offset are set by the `limit` and `offset` parameters. The default is twenty receipts from the beginning, most recent first.
+Receipts come back in pages; set the page size and offset with `limit` and `offset`. By default you get the twenty most recent receipts, newest first.
 
 ```
 GET /receipts?limit=20&offset=0
 ```
 
-Spending summary. Groups items by category over a period and sorts by amount. The bounds are optional; without them everything is counted over all time.
+Spending summary. Groups items by category over a period and sorts by amount. The bounds are optional; without them it covers all time.
 
 ```
 GET /receipts/stats?period_start=2026-09-01T00:00:00Z&period_end=2026-10-01T00:00:00Z
@@ -143,41 +202,86 @@ GET /receipts/stats?period_start=2026-09-01T00:00:00Z&period_end=2026-10-01T00:0
 ]
 ```
 
-The start of the period is included, the end is not. That way neighbouring periods do not overlap and a receipt on the boundary is not counted in both. Items without a category come as their own row, with `category_name` set to `null`.
+The start of the period is included and the end isn't. That way neighbouring periods don't overlap and a receipt on the boundary isn't counted twice. Items without a category get their own row with `category_name` set to `null`.
 
 ## Data schema
 
-Three tables. `receipts` stores the receipt: purchase time, store, and stated total.
-`items` stores the line items, referencing the receipt and, optionally, a category.
-`categories` stores the list of expense categories.
+Four tables:
 
-Line items are read through a `LEFT JOIN` with the categories, so an item without a category does not disappear from the response; its `category_name` is simply empty.
+- `users`: email (unique), password hash, registration time;
+- `receipts`: the receipt itself, meaning its owner, purchase time, shop and total;
+- `items`: the receipt's line items, pointing to the receipt and, if set, to a category;
+- `categories`: the list of categories, shared by all users.
 
-The category list is populated by a migration during deployment: sixteen categories covering an ordinary supermarket receipt. They can be removed or extended through the API, and text parsing works with whatever is in the database at the time of the request.
+Items are read with a `LEFT JOIN` on categories, so an item without a category doesn't disappear from the response; its `category_name` is just empty.
 
-## Technical solutions
+The category list is filled by a migration: sixteen categories, enough for an ordinary supermarket receipt. New ones are added through the API, and text parsing works with whatever is in the database at the moment of the request.
 
-**NUMERIC instead of float for money.** The `float` type stores numbers in a binary representation, and some decimal fractions cannot be represented exactly in this format. This leads to the classic `0.1 + 0.2 = 0.30000000000000004`. While this may seem insignificant, the discrepancy accumulates into a noticeable error when processing a stream of transactions. The `NUMERIC` type stores decimal numbers precisely.
+## Design decisions
 
-**Two queries instead of a JOIN when reading a list.** The straightforward approach is to request a list of receipts and then, in a loop, query the line items for each one; for twenty receipts, this results in twenty-one database queries, the N+1 problem. Here, only two queries are made regardless of the number of receipts: first for the receipts, then for the line items of all those receipts at once using `ANY`, followed by grouping by `receipt_id` in Python. A single query with a `JOIN` isn't suitable either: receipt data would be duplicated in every row, and the nested structure would have to be assembled manually.
+**Passwords are stored only as argon2 hashes.** The password itself is never saved. Argon2 is deliberately slow and memory-hungry, so brute-forcing passwords from a leaked database takes a lot of time and money. The hash never appears in API responses: user data has its own response model that simply doesn't include it.
 
-**TIMESTAMPTZ instead of TIMESTAMP.** It stores a point in time in UTC and returns it in the requester's time zone. A TIMESTAMP simply stores the numbers on the clock face without a time zone reference; consequently, two moments from different time zones become indistinguishable, and time-based sorting can break. For the same reason both the time of purchase and the period bounds in the summary are only accepted with an explicit time zone: without one the moment is undefined, and the database fills it in from the connection's setting, which would make the result depend on the server's configuration rather than on the data sent.
+**JWT instead of sessions.** The token holds the user id and an expiry time, signed with a secret key. To check a request, the server only verifies the signature and doesn't need to hit the database. The downside of JWT is that an issued token can't be revoked before it expires, which is why the lifetime is short, 15 minutes.
 
-**Two-level validation.** Pydantic filters out invalid data at the API boundary and returns a 422 response to the client, specifying the exact field involved. Meanwhile, database CHECK constraints ensure that no garbage data enters the tables by any means, including direct writes via scripts or psql.
+**The receipt's owner comes from the token.** There is no `user_id` field in the request body. If there were, anyone could put in someone else's id and create receipts in their name. The server reads the id from the signed token, and the client can't change it.
 
-**Connection pool.** Establishing a connection to Postgres takes tens of milliseconds, while the query itself takes about a millisecond. This means almost the entire response time would be consumed by the connection process, and under load the database would not be able to handle the influx of new processes. A pool maintains ready-made connections: a query takes a free one, does its work, and returns it.
+**Someone else's receipt returns 404, not 403.** A 403 would say "this receipt exists, but it isn't yours", confirming that it exists, and by walking through ids you could find out how many receipts there are. A 404 looks the same for a receipt that belongs to someone else and one that doesn't exist, so it gives nothing away. Every receipt query filters by `user_id` right in SQL, so the code never even touches other people's data.
 
-**Handling external service failures.** Calls to the language model can fail in various ways: timeouts, rate limit exceedances, server-side errors, or responses in unexpected formats. All these scenarios are mapped to two custom exceptions: one indicating a failure to parse the text, and the other indicating that the service is unavailable. For the client, these translate into 422 and 503 status codes, respectively, allowing them to identify the cause and determine whether to retry the request. The request itself is executed asynchronously, enabling the handler to process other requests while awaiting a response from the model service.
+**The same answer for a wrong email and a wrong password.** If "no such email" and "wrong password" were different responses, you could check whether a particular person has an account. So both cases return the same thing: 401, "wrong email or password".
 
-**Categories are picked from the existing reference list.** Letting the model name a category freely fills the list with synonyms such as food, groceries, nutrition and food products, which makes any statistics built on them meaningless. So the request carries the list of existing categories and the model picks only from those. An item that fits none of them is left without a category at all: a separate "other" entry would be indistinguishable from the case where detection simply failed.
+**Separate models for registration and sign-in.** Registration checks that the password is 8 to 128 characters long. Sign-in only checks the upper limit. If sign-in also enforced the minimum, a short password would get a 422 instead of a 401, and the response would hint at the password rules. The upper limit applies everywhere: argon2 is slow, and a password several megabytes long would tie up the server.
 
-**Caching the parse.** A call to the model costs money and takes a few seconds, while the same text always parses the same way. The result goes into Redis for a day, keyed by a hash of the text together with the list of categories: once the reference list changes, the old parse is no longer valid, it still holds the previous identifiers. The lifetime is there for a different reason: the prompt and the model change over time, and a record that lives forever would eventually serve a parse made by rules the code no longer has. None of this is required for the service to work: when Redis is unavailable, it simply goes to the model and answers more slowly.
+**Which foreign key failed is read from the constraint name.** When a receipt is created, the database can refuse for two reasons: the category doesn't exist, or the user doesn't exist (for example, they were deleted while their token was still valid). Postgres reports which constraint failed, and based on its name the service answers 400 in the first case and 401 in the second.
 
-**Index for time-based filtering.** The summary selects receipts based on `purchased_at`, and the list of receipts is sorted by the same column. Without an index, the database reads the entire table and checks every row in both cases; while this is imperceptible with a thousand receipts, it takes seconds with a million. An index keeps the column values sorted, allowing the required range to be located by traversing the tree, after which the data is read sequentially. The trade-off is disk space and slightly slower insertions, as every new receipt must be written to the index.
+**NUMERIC instead of float for money.** `float` stores numbers in binary, and some decimal fractions can't be written in it exactly. That's where the classic `0.1 + 0.2 = 0.30000000000000004` comes from. On one receipt you won't notice, but across many transactions the error adds up. `NUMERIC` stores decimals exactly.
 
-## On the agenda
+**Two queries instead of N+1 when reading a list.** If you fetch the receipts and then query each receipt's items in a loop, twenty receipts cost twenty-one database queries. Here it's always two: first the receipts, then the items for all of them at once with `ANY`, grouped by receipt in Python. A single query with a `JOIN` doesn't fit either: the receipt data would repeat on every row, and the nested structure would still have to be built by hand.
 
-Per-user data separation and authentication.
+**TIMESTAMPTZ instead of TIMESTAMP.** `TIMESTAMPTZ` stores a point in time in UTC and returns it in whatever time zone is needed. `TIMESTAMP` stores just the numbers on the clock with no zone, so two moments from different zones become indistinguishable. That's why both the purchase time and the period bounds are accepted only with an explicit time zone. Otherwise the database would fill in the zone from the connection settings, and the result would depend on how the server is configured.
+
+**Validation on two levels.** Pydantic rejects bad data at the API boundary and returns a 422 naming the field. `CHECK` constraints in the database keep garbage out of the tables even if someone writes to them bypassing the API, from a script or psql.
+
+**Connection pool.** Opening a connection to Postgres takes tens of milliseconds, while a query itself takes about one. Opening a connection per request would spend almost the whole response time on that, and under load the database would drown in new processes. The pool keeps connections ready: a request takes a free one, does its work and gives it back.
+
+**Language model failures.** A request to the model can fail in many ways: a timeout, a rate limit, an error on their side, a response in an unexpected format. All of this comes down to two exceptions of our own: "the text couldn't be parsed" and "the service is unavailable". The client gets a 422 or a 503 and knows whether retrying makes sense. The call to the model is async, so while the service waits for an answer it keeps serving other requests.
+
+**Categories only from the list.** If the model could name categories freely, the list would fill up with synonyms like "food", "groceries", "nutrition", and the stats built on them would fall apart. So the model gets the list of existing categories and picks only from it. If nothing fits, the item stays without a category. A separate "other" category would be indistinguishable from the case where the model simply failed.
+
+**Caching parse results.** A request to the model costs money and takes a few seconds, while the same text always parses the same way. The result goes into Redis for a day, keyed by a hash of the text together with the category list: if the list changes, the old result is no longer valid because it holds old ids. The expiry is there for a different reason: the prompt and the model change over time, and a record kept forever would eventually return a result built by rules the code no longer has. The service works without Redis too; it just goes to the model every time and answers more slowly.
+
+**Indexes.** The summary selects receipts by `purchased_at`, the list is sorted by it, and every receipt query filters by `user_id`. Both columns are indexed. Without the indexes the database would read the whole table and check every row. With a thousand receipts you won't notice; with a million it takes seconds. The price of an index is disk space and slightly slower inserts.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+DATABASE_URL="postgresql://postgres:secret@localhost:5433/receipts_test" alembic upgrade head
+pytest
+```
+
+The test database address is passed explicitly because `.env` points to the main one, and the schema has to be applied to both. The tests themselves take the database address, the Redis address and a test `JWT_SECRET` from `pytest.ini` and never touch the main database.
+
+What's covered:
+
+- creating and reading receipts, pagination, categories, discrepancy calculation, the period summary;
+- input validation and error codes;
+- text parsing, with the model replaced by a fake so the tests never call OpenAI;
+- registration, sign-in, `/me`, a duplicate email in any letter case, email and password length right at the limit and one step past it;
+- that the password hash never shows up in any response;
+- that every protected endpoint returns 401 without a token;
+- broken tokens: garbage instead of a token, a token with one character changed, a token signed with a different key, one without `sub` and one with a non-numeric `sub`, plus an expired token and malformed headers;
+- that a user can't see someone else's receipt by id, in the list or in the summary.
+
+Before each test the tables and the cache are cleared; the cache lives in a separate Redis database. Before each test a user is also created automatically and their token is added to requests. Tests that need no such user are marked `@pytest.mark.no_auth`. Test order and repeated runs don't affect the results.
+
+CI runs ruff, mypy, the migrations and all tests on every push.
+
+## Plans
+
+- Refresh tokens, so you don't have to sign in every 15 minutes, and sign-out that revokes the token.
+- Editing and deleting receipts.
+- Rate limiting for sign-in attempts and model requests.
+- Running the whole service with a single Docker command.
 
 ## License
 
