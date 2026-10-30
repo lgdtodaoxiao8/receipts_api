@@ -3,6 +3,7 @@ import json
 import httpx
 from pydantic import ValidationError
 
+from config import OPENAI_MODEL_NAME
 from models import ItemIn, ReceiptIn
 
 SYSTEM_PROMPT = """
@@ -16,12 +17,12 @@ SYSTEM_PROMPT = """
     }
 
     цены только числами, без валюты; строку с итогом не включать в items;
-    если магазин или итог не найдет, ставь null; лишнее не включай в ответ.
+    если магазин или итог не найден, ставь null; лишнее не включай в ответ.
     total брать только из явной строки с итогом или суммой в тексте;
     не вычислять и не складывать самостоятельно;если такой строки нет, ставить null;
 
     У каждой товарной позиции должно быть поле category с названием категории, 
-    названия можно брать только из предложенного списка существующих катеогрий,
+    названия можно брать только из предложенного списка существующих категорий,
     а если ни одна не подходит, то null. Придумывать свои категории не из списка запрещено;
     если список категорий пуст, то всем позициям ставь null.
 """
@@ -64,7 +65,7 @@ class LLMClient:
         system_prompt = f"{SYSTEM_PROMPT}\n\nДоступные категории: {categories_line}"
 
         payload = {
-            "model": "gpt-4o-mini",
+            "model": OPENAI_MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
@@ -94,7 +95,7 @@ class LLMClient:
                 category_id = None
 
                 if item["category"] in categories:
-                    category_id = categories[item.get("category")]
+                    category_id = categories[item["category"]]
 
                 items.append(
                     ItemIn(
