@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import psycopg
 import pytest
@@ -18,7 +18,7 @@ def client() -> Iterator[TestClient]:
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def clean_db() -> Iterator[None]:
     with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
         cur.execute(
             "TRUNCATE items, receipts, categories, users RESTART IDENTITY CASCADE"
@@ -27,22 +27,29 @@ def clean_db():
 
 
 @pytest.fixture(autouse=True)
-def clean_cache():
+def clean_cache() -> None:
     redis_client.flushdb()
 
 
-@pytest.fixture()
-def create_user(client: TestClient, clean_db):
+@pytest.fixture
+def create_user(client: TestClient, clean_db) -> Callable[..., dict[str, str]]:
     def _make(
-        email: str | None = "example@mail.com",
-        password: str | None = "password-example",
-    ):
+        email: str = "example@mail.com",
+        password: str = "password-example",
+    ) -> dict[str, str]:
+        response = client.post(
+            "/auth/register", json={"email": email, "password": password}
+        )
 
-        payload = {"email": email, "password": password}
+        assert response.status_code == 201
 
-        assert client.post("/auth/register", json=payload).status_code == 201
-
-        login_response = client.post("/auth/login", json=payload)
+        login_response = client.post(
+            "/auth/login",
+            json={
+                "email": email,
+                "password": password,
+            },
+        )
 
         assert login_response.status_code == 200
 
@@ -54,14 +61,17 @@ def create_user(client: TestClient, clean_db):
 
 
 @pytest.fixture(autouse=True)
-def default_user(client: TestClient, create_user):
+def default_user(request, client: TestClient, create_user) -> Iterator[None]:
+    if request.node.get_closest_marker("no_auth"):
+        yield
+        return
     client.headers.update(create_user())
     yield
     client.headers.pop("Authorization", None)
 
 
 @pytest.fixture
-def make_receipt(client: TestClient):
+def make_receipt(client: TestClient) -> Callable[..., dict]:
     def _make(shop="Тест", total=100, items=None, purchased_at=None):
 
         if items is None:
@@ -83,7 +93,7 @@ def make_receipt(client: TestClient):
 
 
 @pytest.fixture
-def make_category(client: TestClient):
+def make_category(client: TestClient) -> Callable[..., dict]:
     def _make(name="Тест"):
         response = client.post(
             "/categories",

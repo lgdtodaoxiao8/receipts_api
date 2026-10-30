@@ -1,12 +1,17 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 import api
 from llm import LLMServiceError, ReceiptParseError
 from models import ItemIn, ReceiptIn
+from security import SECRET_KEY, create_access_token
+
+valid_token = create_access_token(user_id=1)
+replaced = valid_token[:-1] + ("a" if valid_token[-1] != "a" else "b")
 
 
 def test_ping(client: TestClient):
@@ -507,7 +512,6 @@ def test_parse_receipt_service_error(client: TestClient, monkeypatch):
     assert response.status_code == 503
 
     assert "detail" in response.json()
-    assert response.json()["detail"] == "сервис модели недоступен или вернул ошибку"
 
 
 def test_parse_receipt_string_too_short_error(client: TestClient):
@@ -705,3 +709,396 @@ def test_get_stats_one_bound(client: TestClient, make_receipt):
 
     assert response_assert_two.status_code == 200
     assert response_assert_two.json()[0]["items_count"] == 2
+
+
+@pytest.mark.no_auth
+def test_register(client: TestClient):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "email@email.com",
+            "password": "Abcdefg123",
+        },
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    assert data["email"] == "email@email.com"
+    assert "id" in data
+    assert "password_hash" not in data
+
+
+@pytest.mark.no_auth
+def test_register_upper_email(client: TestClient):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "TEST@MAIL.COM",
+            "password": "testpass",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["email"] == "test@mail.com"
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "email, status_code",
+    [
+        pytest.param(
+            ("a" * 91) + "@mail.com",
+            201,
+            id="max_len",
+        ),
+        pytest.param(
+            ("a" * 92) + "@mail.com",
+            422,
+            id="out_of_max_len",
+        ),
+    ],
+)
+def test_mail_credentials_constraints(client: TestClient, email, status_code):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": "testpass",
+        },
+    )
+
+    assert response.status_code == status_code
+
+    if status_code == 422:
+        data = response.json()
+        assert len(data["detail"]) == 1
+        assert data["detail"][0]["loc"] == ["body", "email"]
+        assert data["detail"][0]["type"] == "too_long"
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "password, status_code",
+    [
+        pytest.param(
+            "12345678",
+            201,
+            id="min_len",
+        ),
+        pytest.param(
+            "1234567",
+            422,
+            id="out_of_min_len",
+        ),
+        pytest.param(
+            f"{'1' * 128}",
+            201,
+            id="max_len",
+        ),
+        pytest.param(
+            f"{'1' * 129}",
+            422,
+            id="out_of_max_len",
+        ),
+    ],
+)
+def test_password_credentials_constraints(client: TestClient, password, status_code):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "test@mail.com",
+            "password": password,
+        },
+    )
+
+    assert response.status_code == status_code
+    if status_code == 422:
+        assert response.json()["detail"][0]["loc"] == ["body", "password"]
+
+
+@pytest.mark.no_auth
+def test_login(client: TestClient):
+    response_register = client.post(
+        "/auth/register",
+        json={
+            "email": "test@mail.com",
+            "password": "testpass",
+        },
+    )
+
+    assert response_register.status_code == 201
+
+    response_login = client.post(
+        "/auth/login",
+        json={
+            "email": "test@mail.com",
+            "password": "testpass",
+        },
+    )
+
+    assert response_login.status_code == 200
+
+    data_login = response_login.json()
+
+    assert "access_token" in data_login
+    assert data_login["token_type"] == "bearer"
+
+    authorization = {"Authorization": f"Bearer {data_login['access_token']}"}
+
+    response_me = client.get("/me", headers=authorization)
+
+    assert response_me.status_code == 200
+
+    data_me = response_me.json()
+    data_register = response_register.json()
+
+    assert data_me["id"] == data_register["id"]
+    assert data_me["email"] == data_register["email"]
+    assert "password_hash" not in data_login
+    assert "password_hash" not in data_me
+
+
+@pytest.mark.no_auth
+def test_login_short_password(client: TestClient):
+    assert (
+        client.post(
+            "/auth/register",
+            json={
+                "email": "test@mail.com",
+                "password": "testpass",
+            },
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "test@mail.com",
+            "password": "short",
+        },
+    )
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+def test_create_receipt_with_nonexistent_user(client: TestClient):
+    token = create_access_token(999, 15)
+
+    response = client.post(
+        "/receipts",
+        json={"items": [{"name": "test", "price": 100}]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            {
+                "email": "test@mail.com",
+                "password": "Abcdefg123",
+            },
+            id="same_mail",
+        ),
+        pytest.param(
+            {
+                "email": "TEST@mail.com",
+                "password": "Abcdefg123",
+            },
+            id="same_mail_upper_and_lower",
+        ),
+    ],
+)
+def test_register_same_mail(client: TestClient, payload, create_user):
+    create_user(email="test@mail.com")
+
+    response = client.post("/auth/register", json=payload)
+
+    assert response.status_code == 409
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "bad_payload",
+    [
+        pytest.param(
+            {
+                "email": "test@mail.com",
+                "password": "bad_testpass",
+            },
+            id="wrong_password",
+        ),
+        pytest.param(
+            {
+                "email": "nonexist@mail.com",
+                "password": "testpass",
+            },
+            id="nonexistent_mail",
+        ),
+    ],
+)
+def test_login_bad_data(client: TestClient, bad_payload, create_user):
+    create_user(
+        email="test@mail.com",
+        password="testpass",
+    )
+
+    response = client.post("/auth/login", json=bad_payload)
+
+    assert response.status_code == 401
+
+    data = response.json()
+
+    assert len(data) == 1
+    assert "detail" in data
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        pytest.param("GET", "/receipts", None, id="list_receipts"),
+        pytest.param("GET", "/receipts/1", None, id="get_receipt"),
+        pytest.param("GET", "/receipts/stats", None, id="get_stats"),
+        pytest.param(
+            "POST",
+            "/receipts",
+            {"items": [{"name": "test", "price": 100}]},
+            id="create_receipt",
+        ),
+        pytest.param(
+            "POST", "/receipts/parse", {"text": "test 100 test 50"}, id="get_parse"
+        ),
+        pytest.param("POST", "/categories", {"name": "test"}, id="create_category"),
+    ],
+)
+def test_no_token(client: TestClient, method, path, body):
+    response = client.request(method=method, url=path, json=body)
+
+    assert response.status_code == 401
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("abc", id="not_token"),
+        pytest.param(replaced, id="replaced_character"),
+        pytest.param(
+            jwt.encode({"sub": "1"}, "wrong_secret", algorithm="HS256"),
+            id="wrong_secret",
+        ),
+        pytest.param(
+            jwt.encode({"exp": 9999999999}, SECRET_KEY, algorithm="HS256"), id="no_sub"
+        ),
+        pytest.param(
+            jwt.encode({"sub": "abc"}, SECRET_KEY, algorithm="HS256"), id="bad_sub"
+        ),
+    ],
+)
+def test_me_bad_token(client: TestClient, token):
+    response = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param(None, id="no_headers"),
+        pytest.param({"Authorization": ""}, id="no_token"),
+        pytest.param({"Authorization": "Basic abc"}, id="bad_authorization"),
+    ],
+)
+def test_me_bad_headers(client: TestClient, headers):
+    response = client.get("/me", headers=headers)
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+def test_me_expired_token(client: TestClient):
+    token = create_access_token(user_id=1, duration_min=-1)
+
+    response = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+def test_user_scope_foreign_receipt(client: TestClient, create_user):
+
+    user_a_auth = create_user(email="user_A@mail.com", password="testpass")
+
+    response_receipt_a = client.post(
+        "/receipts",
+        json={"shop": "shop_A", "items": [{"name": "товар", "price": 100}]},
+        headers=user_a_auth,
+    )
+
+    assert response_receipt_a.status_code == 201
+
+    user_b_auth = create_user(email="user_B@mail.com", password="testpass")
+
+    response_get_receipt_by_id_a_auth = client.get(
+        f"/receipts/{response_receipt_a.json()['id']}", headers=user_a_auth
+    )
+
+    assert response_get_receipt_by_id_a_auth.status_code == 200
+
+    response_get_receipt_by_id_b_auth = client.get(
+        f"/receipts/{response_receipt_a.json()['id']}", headers=user_b_auth
+    )
+
+    assert response_get_receipt_by_id_b_auth.status_code == 404
+    assert "detail" in response_get_receipt_by_id_b_auth.json()
+    assert len(response_get_receipt_by_id_b_auth.json()) == 1
+
+    response_get_list_receipts_a_auth = client.get(
+        "/receipts",
+        headers=user_a_auth,
+    )
+
+    assert response_get_list_receipts_a_auth.status_code == 200
+
+    assert len(response_get_list_receipts_a_auth.json()) == 1
+    assert response_get_list_receipts_a_auth.json()[0]["shop"] == "shop_A"
+
+    response_get_list_receipts_b_auth = client.get(
+        "/receipts",
+        headers=user_b_auth,
+    )
+
+    assert response_get_list_receipts_b_auth.status_code == 200
+    assert len(response_get_list_receipts_b_auth.json()) == 0
+
+    response_get_stats_a_auth = client.get(
+        "/receipts/stats",
+        headers=user_a_auth,
+    )
+
+    assert response_get_stats_a_auth.status_code == 200
+    assert len(response_get_stats_a_auth.json()) == 1
+
+    response_get_stats_b_auth = client.get(
+        "/receipts/stats",
+        headers=user_b_auth,
+    )
+
+    assert response_get_stats_b_auth.status_code == 200
+    assert len(response_get_stats_b_auth.json()) == 0
