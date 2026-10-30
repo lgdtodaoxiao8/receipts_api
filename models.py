@@ -8,12 +8,25 @@ from pydantic import (
     EmailStr,
     Field,
     computed_field,
+    field_validator,
 )
 
 
-class UserIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
+class UserBase(BaseModel):
+    email: EmailStr = Field(max_length=100)
+
+    @field_validator("email")
+    @classmethod
+    def normalized_email(cls, value: str) -> str:
+        return value.lower()
+
+
+class UserRegister(UserBase):
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLogin(UserBase):
+    password: str = Field(max_length=128)
 
 
 class UserLoginOut(BaseModel):

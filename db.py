@@ -199,13 +199,11 @@ def save_user(
     email: str,
     password_hash: str,
 ) -> UserOut:
-    email = email.lower()
-
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            INSERT INTO users (email, password_hash, created_at)
-            VALUES (%s, %s, now())
+            INSERT INTO users (email, password_hash)
+            VALUES (%s, %s)
             RETURNING id
             """,
             (email, password_hash),
@@ -220,9 +218,6 @@ def save_user(
 
 
 def get_user_by_email(conn: psycopg.Connection, email: str) -> UserLoginOut:
-
-    email = email.lower()
-
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
