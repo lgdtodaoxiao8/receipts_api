@@ -8,7 +8,7 @@ A service for tracking purchases. It takes a receipt with a list of items and st
 
 Every user sees only their own receipts. You sign in with email and password, and after that requests carry a JWT.
 
-The idea is simple: instead of a spreadsheet you fill in manually, receipts go to the API, and you get a spending summary by category out of them.
+It replaces a spreadsheet where purchases are typed in by hand: receipts go to the API, and the API builds a spending summary by category from them.
 
 ## Stack
 
@@ -19,15 +19,8 @@ Python 3.12, FastAPI, PostgreSQL, Redis, psycopg 3, Pydantic, Alembic, PyJWT, ar
 ```bash
 git clone https://github.com/lgdtodaoxiao8/receipts_api.git
 cd receipts_api
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
-docker compose up -d
-alembic upgrade head
-fastapi dev api.py
 ```
-
-`docker compose` starts two databases, the main one on port 5432 and the test one on 5433, plus Redis on 6379. Alembic creates the tables. The app reads the database and Redis addresses from `.env`; there is a template in `.env.example`.
 
 Before the first run, set `JWT_SECRET` in `.env`. It is the key that signs tokens. Don't leave it empty: anyone can forge a token signed with an empty key. You can generate one like this:
 
@@ -37,7 +30,27 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 Parsing receipt text needs an OpenAI key in `OPENAI_API_KEY`. Everything else works without it.
 
+Then start everything in Docker:
+
+```bash
+docker compose up -d --build
+```
+
+Compose starts the API on port 8000, the main database on 5432, the test database on 5433 and Redis on 6379. `--build` rebuilds the API image, so the container gets the current code. The API container waits until the database passes its health check, applies the migrations and only then starts the server. Inside Docker the database and Redis addresses are set in `docker-compose.yml` with the service names `db` and `cache_redis`, so the localhost addresses in `.env` don't need changing.
+
 API docs once it's running: http://127.0.0.1:8000/docs
+
+For development with auto-reload, run only the databases and Redis in Docker and the API on your machine:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+docker compose up -d db test_db cache_redis
+alembic upgrade head
+fastapi dev api.py
+```
+
+In this mode the app takes the addresses from `.env`.
 
 ## Authentication
 
@@ -85,7 +98,7 @@ A token lasts 15 minutes; after that you sign in again. `GET /me` returns the id
 
 Emails are lowercased, so `User@Mail.com` and `user@mail.com` are the same account. An email can be up to 100 characters, a password from 8 to 128.
 
-In Swagger, protected endpoints have an `authorization` field. Put the whole string there, including the word `Bearer`.
+In Swagger, click Authorize at the top of the page and paste the token without the word `Bearer`. Swagger then adds the header to every request.
 
 ## API
 
@@ -213,6 +226,8 @@ Four tables:
 - `items`: the receipt's line items, pointing to the receipt and, if set, to a category;
 - `categories`: the list of categories, shared by all users.
 
+Deleting a receipt deletes its items, and deleting a user deletes their receipts: both foreign keys are `ON DELETE CASCADE`. The API has no delete endpoints yet, but if rows are removed directly in the database, no orphaned items or receipts are left behind.
+
 Items are read with a `LEFT JOIN` on categories, so an item without a category doesn't disappear from the response; its `category_name` is just empty.
 
 The category list is filled by a migration: sixteen categories, enough for an ordinary supermarket receipt. New ones are added through the API, and text parsing works with whatever is in the database at the moment of the request.
@@ -261,6 +276,8 @@ pytest
 
 The test database address is passed explicitly because `.env` points to the main one, and the schema has to be applied to both. The tests themselves take the database address, the Redis address and a test `JWT_SECRET` from `pytest.ini` and never touch the main database.
 
+The test database runs without a volume, so its data lives inside the container. After the container is recreated (for example after `docker compose down`), the database is empty again, and the migration command above has to be run once more.
+
 What's covered:
 
 - creating and reading receipts, pagination, categories, discrepancy calculation, the period summary;
@@ -281,7 +298,6 @@ CI runs ruff, mypy, the migrations and all tests on every push.
 - Refresh tokens, so you don't have to sign in every 15 minutes, and sign-out that revokes the token.
 - Editing and deleting receipts.
 - Rate limiting for sign-in attempts and model requests.
-- Running the whole service with a single Docker command.
 
 ## License
 
