@@ -5,7 +5,7 @@ import psycopg
 import redis.exceptions
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import ExpiredSignatureError, InvalidTokenError
 from psycopg_pool import ConnectionPool
@@ -293,9 +293,7 @@ def ping() -> dict[str, str]:
     responses={409: {"description": "категория уже существует"}},
     dependencies=[Depends(get_current_user_id)],
 )
-def create_category(
-    category: CategoryIn, authorization: str | None = Header(default=None)
-) -> CategoryOut:
+def create_category(category: CategoryIn) -> CategoryOut:
     with pool.connection() as conn:
         try:
             return save_category(conn=conn, name=category.name)
