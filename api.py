@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 import psycopg
 import redis.exceptions
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import ExpiredSignatureError, InvalidTokenError
 from psycopg_pool import ConnectionPool
 from pydantic import AwareDatetime, ValidationError
@@ -37,6 +39,8 @@ from models import (
 )
 from security import TokenInfoError, create_access_token, decode_token
 
+bearer = HTTPBearer(auto_error=False)
+
 hasher = PasswordHasher()
 
 pool = ConnectionPool(DATABASE_URL, open=False)
@@ -56,11 +60,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-def get_current_user_id(authorization: str | None) -> int:
-    if not authorization or not authorization.startswith("Bearer "):
+def get_current_user_id(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> int:
+    if credentials is None:
         raise HTTPException(status_code=401, detail="нет токена")
 
-    token = authorization.removeprefix("Bearer ")
+    token = credentials.credentials
 
     try:
         user_id = decode_token(token=token)
@@ -71,8 +77,7 @@ def get_current_user_id(authorization: str | None) -> int:
 
 
 @app.get("/me")
-def me(authorization: str | None = Header(default=None)) -> UserOut:
-    user_id = get_current_user_id(authorization=authorization)
+def me(user_id: Annotated[int, Depends(get_current_user_id)]) -> UserOut:
     with pool.connection() as conn:
         try:
             response = get_user_by_id(conn=conn, user_id=user_id)
@@ -142,14 +147,9 @@ def read_categories() -> list[CategoryOut]:
         422: {"description": "не удалось разобрать текст как чек"},
         503: {"description": "сервис модели недоступен или вернул ошибку"},
     },
+    dependencies=[Depends(get_current_user_id)],
 )
-async def parse_receipt(
-    payload: ReceiptTextIn,
-    authorization: str | None = Header(default=None),
-) -> ReceiptIn:
-
-    get_current_user_id(authorization=authorization)
-
+async def parse_receipt(payload: ReceiptTextIn) -> ReceiptIn:
     categories = await run_in_threadpool(read_categories)
 
     categories_dict: dict[str, int] = {
@@ -198,11 +198,8 @@ async def parse_receipt(
     },
 )
 def create_receipt(
-    receipt: ReceiptIn,
-    authorization: str | None = Header(default=None),
+    receipt: ReceiptIn, user_id: Annotated[int, Depends(get_current_user_id)]
 ) -> ReceiptOut:
-
-    user_id = get_current_user_id(authorization=authorization)
 
     items = [(item.name, item.price, item.category_id) for item in receipt.items]
 
@@ -239,13 +236,10 @@ def create_receipt(
 
 @app.get("/receipts/stats", responses={422: {"description": "указан неверный период"}})
 def list_categories_stats(
+    user_id: Annotated[int, Depends(get_current_user_id)],
     period_start: AwareDatetime | None = None,
     period_end: AwareDatetime | None = None,
-    authorization: str | None = Header(default=None),
 ) -> list[Stat]:
-
-    user_id = get_current_user_id(authorization=authorization)
-
     if (
         period_start is not None
         and period_end is not None
@@ -263,13 +257,10 @@ def list_categories_stats(
 
 @app.get("/receipts")
 def list_receipts(
+    user_id: Annotated[int, Depends(get_current_user_id)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    authorization: str | None = Header(default=None),
 ) -> list[ReceiptOut]:
-
-    user_id = get_current_user_id(authorization=authorization)
-
     with pool.connection() as conn:
         result_list = fetch_receipts(
             conn=conn, limit=limit, offset=offset, user_id=user_id
@@ -280,12 +271,8 @@ def list_receipts(
 
 @app.get("/receipts/{receipt_id}", responses={404: {"description": "Чек не найден"}})
 def get_receipt(
-    receipt_id: int,
-    authorization: str | None = Header(default=None),
+    receipt_id: int, user_id: Annotated[int, Depends(get_current_user_id)]
 ) -> ReceiptOut:
-
-    user_id = get_current_user_id(authorization=authorization)
-
     with pool.connection() as conn:
         receipt = fetch_receipt(conn=conn, receipt_id=receipt_id, user_id=user_id)
 
@@ -304,12 +291,11 @@ def ping() -> dict[str, str]:
     "/categories",
     status_code=201,
     responses={409: {"description": "категория уже существует"}},
+    dependencies=[Depends(get_current_user_id)],
 )
 def create_category(
     category: CategoryIn, authorization: str | None = Header(default=None)
 ) -> CategoryOut:
-    get_current_user_id(authorization=authorization)
-
     with pool.connection() as conn:
         try:
             return save_category(conn=conn, name=category.name)
