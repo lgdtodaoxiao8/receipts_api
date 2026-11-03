@@ -1,4 +1,17 @@
 services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache_redis:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:secret@db:5432/receipts
+      REDIS_URL: redis://cache_redis:6379/0
   db:
     image: postgres:16
     environment:
@@ -8,6 +21,10 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 10
       
   test_db:
     image: postgres:16
