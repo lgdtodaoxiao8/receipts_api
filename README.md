@@ -112,6 +112,7 @@ In Swagger, click Authorize at the top of the page and paste the token without t
 | GET | /receipts | Your receipts, paginated | yes |
 | GET | /receipts/stats | Your spending by category over a period | yes |
 | GET | /receipts/{id} | One of your receipts by id | yes |
+| DELETE | /receipts/{id} | Delete one of your receipts, returns 204 with no body | yes |
 | POST | /categories | Create a category | yes |
 | GET | /categories | List categories | no |
 | GET | /ping | Health check | no |
@@ -217,6 +218,18 @@ GET /receipts/stats?period_start=2026-09-01T00:00:00Z&period_end=2026-10-01T00:0
 
 The start of the period is included and the end isn't. That way neighbouring periods don't overlap and a receipt on the boundary isn't counted twice. Items without a category get their own row with `category_name` set to `null`.
 
+Deleting a receipt. Only its owner can do it. The receipt goes away together with all its items, and the response has no body.
+
+```
+DELETE /receipts/1
+```
+
+```
+204 No Content
+```
+
+If the receipt doesn't exist or belongs to someone else, the answer is 404, the same as for `GET`. Deleting a receipt twice gives 204 the first time and 404 the second.
+
 ## Data schema
 
 Four tables:
@@ -226,7 +239,7 @@ Four tables:
 - `items`: the receipt's line items, pointing to the receipt and, if set, to a category;
 - `categories`: the list of categories, shared by all users.
 
-Deleting a receipt deletes its items, and deleting a user deletes their receipts: both foreign keys are `ON DELETE CASCADE`. The API has no delete endpoints yet, but if rows are removed directly in the database, no orphaned items or receipts are left behind.
+Both foreign keys, from items to receipts and from receipts to users, are `ON DELETE CASCADE`. So when a receipt is deleted, Postgres removes its items in the same transaction, and the code only has to delete one row. Deleting a user takes their receipts with them in the same way. Nothing in the database can end up pointing at a receipt that no longer exists.
 
 Items are read with a `LEFT JOIN` on categories, so an item without a category doesn't disappear from the response; its `category_name` is just empty.
 
@@ -270,24 +283,21 @@ The category list is filled by a migration: sixteen categories, enough for an or
 
 ```bash
 pip install -r requirements-dev.txt
-DATABASE_URL="postgresql://postgres:secret@localhost:5433/receipts_test" alembic upgrade head
 pytest
 ```
 
-The test database address is passed explicitly because `.env` points to the main one, and the schema has to be applied to both. The tests themselves take the database address, the Redis address and a test `JWT_SECRET` from `pytest.ini` and never touch the main database.
-
-The test database runs without a volume, so its data lives inside the container. After the container is recreated (for example after `docker compose down`), the database is empty again, and the migration command above has to be run once more.
+The tests take the database address, the Redis address and a test `JWT_SECRET` from `pytest.ini` and never touch the main database. Before the first test, a session fixture in `conftest.py` runs `alembic upgrade head` against the test database, so you don't have to apply migrations by hand. The test database runs without a volume and comes back empty every time its container is recreated; the fixture rebuilds the schema on the next run. A new migration gets applied to it the same way.
 
 What's covered:
 
-- creating and reading receipts, pagination, categories, discrepancy calculation, the period summary;
+- creating, reading and deleting receipts, pagination, categories, discrepancy calculation, the period summary;
 - input validation and error codes;
 - text parsing, with the model replaced by a fake so the tests never call OpenAI;
 - registration, sign-in, `/me`, a duplicate email in any letter case, email and password length right at the limit and one step past it;
 - that the password hash never shows up in any response;
 - that every protected endpoint returns 401 without a token;
 - broken tokens: garbage instead of a token, a token with one character changed, a token signed with a different key, one without `sub` and one with a non-numeric `sub`, plus an expired token and malformed headers;
-- that a user can't see someone else's receipt by id, in the list or in the summary.
+- that a user can't see someone else's receipt by id, in the list or in the summary, and can't delete it.
 
 Before each test the tables and the cache are cleared; the cache lives in a separate Redis database. Before each test a user is also created automatically and their token is added to requests. Tests that need no such user are marked `@pytest.mark.no_auth`. Test order and repeated runs don't affect the results.
 
@@ -296,7 +306,7 @@ CI runs ruff, mypy, the migrations and all tests on every push.
 ## Plans
 
 - Refresh tokens, so you don't have to sign in every 15 minutes, and sign-out that revokes the token.
-- Editing and deleting receipts.
+- Editing receipts.
 - Rate limiting for sign-in attempts and model requests.
 
 ## License
