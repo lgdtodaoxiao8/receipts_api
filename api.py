@@ -15,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from cache import close_cache, get_cached_parse, set_cached_parse
 from config import ACCESS_TOKEN_LIFETIME, API_KEY, DATABASE_URL, OPENAI_SERVICE_TIMEOUT
 from db import (
+    delete_receipt,
     fetch_categories,
     fetch_categories_stats,
     fetch_receipt,
@@ -280,6 +281,25 @@ def get_receipt(
         raise HTTPException(status_code=404, detail="чек не найден")
 
     return receipt
+
+
+@app.delete(
+    "/receipts/{receipt_id}",
+    status_code=204,
+    responses={404: {"description": "чек не найден"}},
+)
+def remove_receipt(
+    receipt_id: int, user_id: Annotated[int, Depends(get_current_user_id)]
+) -> None:
+    with pool.connection() as conn:
+        deleted = delete_receipt(
+            conn=conn,
+            receipt_id=receipt_id,
+            user_id=user_id,
+        )
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="чек не найден")
 
 
 @app.get("/ping")

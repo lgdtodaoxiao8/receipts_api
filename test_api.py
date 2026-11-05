@@ -981,6 +981,7 @@ def test_login_bad_data(client: TestClient, bad_payload, create_user):
             "POST", "/receipts/parse", {"text": "test 100 test 50"}, id="get_parse"
         ),
         pytest.param("POST", "/categories", {"name": "test"}, id="create_category"),
+        pytest.param("DELETE", "/receipts/1", None, id="delete_receipt"),
     ],
 )
 def test_no_token(client: TestClient, method, path, body):
@@ -1102,3 +1103,37 @@ def test_user_scope_foreign_receipt(client: TestClient, create_user):
 
     assert response_get_stats_b_auth.status_code == 200
     assert len(response_get_stats_b_auth.json()) == 0
+
+
+def test_delete_receipt(client: TestClient, make_receipt):
+    receipt_id = make_receipt()["id"]
+
+    response = client.delete(f"/receipts/{receipt_id}")
+
+    assert response.status_code == 204
+
+    response = client.get(f"/receipts/{receipt_id}")
+
+    assert response.status_code == 404
+
+
+def test_delete_foreign_receipt(client: TestClient, make_receipt, create_user):
+    receipt_id = make_receipt()["id"]
+
+    foreign_auth = create_user(email="test@mail.com")
+
+    foreign_delete_response = client.delete(
+        f"/receipts/{receipt_id}", headers=foreign_auth
+    )
+
+    assert foreign_delete_response.status_code == 404
+
+    own_delete_response = client.delete(f"/receipts/{receipt_id}")
+
+    assert own_delete_response.status_code == 204
+
+
+def test_delete_nonexistent_receipt(client: TestClient):
+    response = client.delete("/receipts/999")
+
+    assert response.status_code == 404

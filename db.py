@@ -139,6 +139,22 @@ def fetch_receipts(
     return result
 
 
+def delete_receipt(conn: psycopg.Connection, receipt_id: int, user_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM receipts
+            WHERE id = %s
+            AND user_id = %s
+        """,
+            (receipt_id, user_id),
+        )
+
+        deleted = cur.rowcount == 1
+
+    return deleted
+
+
 def save_category(conn: psycopg.Connection, name: str) -> CategoryOut:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
