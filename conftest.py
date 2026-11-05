@@ -3,12 +3,19 @@ from collections.abc import Callable, Iterator
 import psycopg
 import pytest
 import redis
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from api import app
 from config import DATABASE_URL, REDIS_URL
 
 redis_client = redis.Redis.from_url(REDIS_URL)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def apply_migrations_head() -> None:
+    command.upgrade(Config("alembic.ini"), "head")
 
 
 @pytest.fixture(scope="session")
