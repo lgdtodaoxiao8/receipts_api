@@ -139,6 +139,69 @@ def fetch_receipts(
     return result
 
 
+def patch_receipt_fields(
+    conn: psycopg.Connection, receipt_id: int, user_id: int, fields: dict
+) -> bool:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+                SELECT shop, total, purchased_at FROM receipts
+                WHERE id = %s 
+                AND user_id = %s 
+                FOR UPDATE
+        """,
+            (receipt_id, user_id),
+        )
+        current_fields = cur.fetchone()
+    if current_fields is None:
+        return False
+    current_fields.update(fields)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE receipts 
+            SET shop = %s, total = %s, purchased_at = %s
+            WHERE id = %s
+        """,
+            (
+                current_fields["shop"],
+                current_fields["total"],
+                current_fields["purchased_at"],
+                receipt_id,
+            ),
+        )
+
+    return True
+
+
+def patch_receipt_items(
+    conn: psycopg.Connection,
+    receipt_id: int,
+    items: list[tuple[str, Decimal, int | None]],
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM items
+            WHERE receipt_id = %s
+            """,
+            (receipt_id,),
+        )
+
+        items_values = [
+            (name, price, receipt_id, category_id) for name, price, category_id in items
+        ]
+
+        cur.executemany(
+            """
+            INSERT INTO items (name, price, receipt_id, category_id)
+            VALUES (%s,%s,%s,%s)
+            """,
+            items_values,
+        )
+
+
 def delete_receipt(conn: psycopg.Connection, receipt_id: int, user_id: int) -> bool:
     with conn.cursor() as cur:
         cur.execute(

@@ -70,12 +70,26 @@ class ItemOut(BaseModel):
     category_name: str | None
 
 
-class ReceiptIn(BaseModel):
+class ReceiptBase(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     shop: str | None = Field(default=None, max_length=200)
     total: Decimal | None = Field(default=None, ge=0)
-    items: list[ItemIn] = Field(min_length=1)
     purchased_at: AwareDatetime | None = None
+
+
+class ReceiptIn(ReceiptBase):
+    items: list[ItemIn] = Field(min_length=1)
+
+
+class ReceiptPatch(ReceiptBase):
+    items: list[ItemIn] | None = Field(min_length=1, default=None)
+
+    @field_validator("items", "purchased_at")
+    @classmethod
+    def not_null_fields(cls, value):
+        if value is None:
+            raise ValueError("поле не может быть пустым")
+        return value
 
 
 class ReceiptOut(BaseModel):

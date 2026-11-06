@@ -4,11 +4,9 @@
 
 # Receipts API
 
-A service for tracking purchases. It takes a receipt with a list of items and stores it in PostgreSQL. Items can be linked to spending categories, and the service checks whether the items add up to the total printed on the receipt. You don't have to type a receipt in by hand: a language model can turn its text into structured data.
+A service for tracking purchases, meant to replace a spreadsheet where spending is typed in by hand. It takes a receipt with a list of items, stores it in PostgreSQL and builds a spending summary by category from your receipts. It also checks whether the items add up to the total printed on the receipt. You don't have to type a receipt in yourself: a language model can turn its text into structured data.
 
 Every user sees only their own receipts. You sign in with email and password, and after that requests carry a JWT.
-
-It replaces a spreadsheet where purchases are typed in by hand: receipts go to the API, and the API builds a spending summary by category from them.
 
 ## Stack
 
@@ -112,6 +110,7 @@ In Swagger, click Authorize at the top of the page and paste the token without t
 | GET | /receipts | Your receipts, paginated | yes |
 | GET | /receipts/stats | Your spending by category over a period | yes |
 | GET | /receipts/{id} | One of your receipts by id | yes |
+| PATCH | /receipts/{id} | Edit one of your receipts, only the fields you send change | yes |
 | DELETE | /receipts/{id} | Delete one of your receipts, returns 204 with no body | yes |
 | POST | /categories | Create a category | yes |
 | GET | /categories | List categories | no |
@@ -119,18 +118,18 @@ In Swagger, click Authorize at the top of the page and paste the token without t
 
 Response codes:
 
+- 400: an item refers to a category that doesn't exist;
 - 401: no token, a broken or expired token, wrong email or password at sign-in, or the token's user no longer exists;
 - 404: the receipt doesn't exist or belongs to someone else;
 - 409: the email is already registered, or a category with that name already exists;
-- 400: an item refers to a category that doesn't exist;
-- 422: the data failed validation, the text couldn't be parsed as a receipt, or the period bounds have no time zone or the end comes before the start;
+- 422: the data failed validation (including `null` for `items` or `purchased_at` when editing a receipt), the text couldn't be parsed as a receipt, or the period bounds have no time zone or the end comes before the start;
 - 503: the model service is unavailable.
 
 ## Examples
 
 All requests below are sent with the `Authorization` header.
 
-Parsing text. The service sends the text to a language model together with the list of existing categories and returns structured data. It doesn't save anything: the client looks at the result first and then sends it through the regular `POST /receipts`. The model only picks categories from the list it was given and uses null when none fit.
+Parsing text. The service sends the text to a language model together with the list of existing categories and returns structured data. Nothing is written to the database at this step: the client checks the result first and then sends it through the regular `POST /receipts`. The model only picks categories from the list it was given and uses null when none fit.
 
 ```json
 POST /receipts/parse
@@ -218,6 +217,37 @@ GET /receipts/stats?period_start=2026-09-01T00:00:00Z&period_end=2026-10-01T00:0
 
 The start of the period is included and the end isn't. That way neighbouring periods don't overlap and a receipt on the boundary isn't counted twice. Items without a category get their own row with `category_name` set to `null`.
 
+Editing a receipt. Only the fields sent in the request change, everything else stays as it was. If you send `items`, the old items are deleted and the new ones are written in their place; there's no way to change a single item on its own. The response is the whole receipt after the change.
+
+```json
+PATCH /receipts/1
+
+{
+  "shop": "Small",
+  "items": [
+    {"name": "kefir", "price": 380, "category_id": 1}
+  ]
+}
+```
+
+```json
+200 OK
+
+{
+  "id": 1,
+  "shop": "Small",
+  "total": "650.00",
+  "purchased_at": "2026-09-26T19:12:03Z",
+  "items": [
+    {"name": "kefir", "price": "380.00", "category_name": "food"}
+  ],
+  "calculated_total": "380.00",
+  "discrepancy": "-270.00"
+}
+```
+
+`shop` and `total` can be cleared by sending `null`. `items` and `purchased_at` can't: `null` gives 422, and so does an empty item list. Someone else's receipt or a missing one gives 404, and an item with a category that doesn't exist gives 400. The whole edit runs in one transaction, so if the request fails on the items, the receipt fields stay unchanged too.
+
 Deleting a receipt. Only its owner can do it. The receipt goes away together with all its items, and the response has no body.
 
 ```
@@ -239,7 +269,7 @@ Four tables:
 - `items`: the receipt's line items, pointing to the receipt and, if set, to a category;
 - `categories`: the list of categories, shared by all users.
 
-Both foreign keys, from items to receipts and from receipts to users, are `ON DELETE CASCADE`. So when a receipt is deleted, Postgres removes its items in the same transaction, and the code only has to delete one row. Deleting a user takes their receipts with them in the same way. Nothing in the database can end up pointing at a receipt that no longer exists.
+Both foreign keys, from items to receipts and from receipts to users, are `ON DELETE CASCADE`. So when a receipt is deleted, Postgres removes its items in the same transaction, and the code only has to delete one row. Deleting a user takes their receipts with them in the same way.
 
 Items are read with a `LEFT JOIN` on categories, so an item without a category doesn't disappear from the response; its `category_name` is just empty.
 
@@ -247,7 +277,7 @@ The category list is filled by a migration: sixteen categories, enough for an or
 
 ## Design decisions
 
-**Passwords are stored only as argon2 hashes.** The password itself is never saved. Argon2 is deliberately slow and memory-hungry, so brute-forcing passwords from a leaked database takes a lot of time and money. The hash never appears in API responses: user data has its own response model that simply doesn't include it.
+**Passwords are stored only as argon2 hashes.** Argon2 is deliberately slow and memory-hungry, so brute-forcing passwords from a leaked database takes a lot of time and money. The hash never appears in API responses: user data has its own response model that simply doesn't include it.
 
 **JWT instead of sessions.** The token holds the user id and an expiry time, signed with a secret key. To check a request, the server only verifies the signature and doesn't need to hit the database. The downside of JWT is that an issued token can't be revoked before it expires, which is why the lifetime is short, 15 minutes.
 
@@ -277,6 +307,8 @@ The category list is filled by a migration: sixteen categories, enough for an or
 
 **Caching parse results.** A request to the model costs money and takes a few seconds, while the same text always parses the same way. The result goes into Redis for a day, keyed by a hash of the text together with the category list: if the list changes, the old result is no longer valid because it holds old ids. The expiry is there for a different reason: the prompt and the model change over time, and a record kept forever would eventually return a result built by rules the code no longer has. The service works without Redis too; it just goes to the model every time and answers more slowly.
 
+**PATCH tells a missing field from `null`.** Pydantic remembers which fields actually came in the request, and only those go to the database, via `model_dump(exclude_unset=True)`. Without that, `{"shop": "Small"}` would wipe the other fields, since their default in the model is `None`. The receipt row is locked with `SELECT ... FOR UPDATE` during the edit, so two PATCH requests at the same time can't overwrite each other's changes.
+
 **Indexes.** The summary selects receipts by `purchased_at`, the list is sorted by it, and every receipt query filters by `user_id`. Both columns are indexed. Without the indexes the database would read the whole table and check every row. With a thousand receipts you won't notice; with a million it takes seconds. The price of an index is disk space and slightly slower inserts.
 
 ## Tests
@@ -290,14 +322,15 @@ The tests take the database address, the Redis address and a test `JWT_SECRET` f
 
 What's covered:
 
-- creating, reading and deleting receipts, pagination, categories, discrepancy calculation, the period summary;
+- creating, reading, editing and deleting receipts, pagination, categories, discrepancy calculation, the period summary;
 - input validation and error codes;
 - text parsing, with the model replaced by a fake so the tests never call OpenAI;
 - registration, sign-in, `/me`, a duplicate email in any letter case, email and password length right at the limit and one step past it;
 - that the password hash never shows up in any response;
 - that every protected endpoint returns 401 without a token;
 - broken tokens: garbage instead of a token, a token with one character changed, a token signed with a different key, one without `sub` and one with a non-numeric `sub`, plus an expired token and malformed headers;
-- that a user can't see someone else's receipt by id, in the list or in the summary, and can't delete it.
+- that a user can't see someone else's receipt by id, in the list or in the summary, and can't edit or delete it;
+- that a failed PATCH rolls back the whole edit, receipt fields included.
 
 Before each test the tables and the cache are cleared; the cache lives in a separate Redis database. Before each test a user is also created automatically and their token is added to requests. Tests that need no such user are marked `@pytest.mark.no_auth`. Test order and repeated runs don't affect the results.
 
@@ -306,7 +339,6 @@ CI runs ruff, mypy, the migrations and all tests on every push.
 ## Plans
 
 - Refresh tokens, so you don't have to sign in every 15 minutes, and sign-out that revokes the token.
-- Editing receipts.
 - Rate limiting for sign-in attempts and model requests.
 
 ## License

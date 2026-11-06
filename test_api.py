@@ -982,6 +982,7 @@ def test_login_bad_data(client: TestClient, bad_payload, create_user):
         ),
         pytest.param("POST", "/categories", {"name": "test"}, id="create_category"),
         pytest.param("DELETE", "/receipts/1", None, id="delete_receipt"),
+        pytest.param("PATCH", "/receipts/1", {}, id="patch_receipt"),
     ],
 )
 def test_no_token(client: TestClient, method, path, body):
@@ -997,7 +998,7 @@ def test_no_token(client: TestClient, method, path, body):
         pytest.param("abc", id="not_token"),
         pytest.param(replaced, id="replaced_character"),
         pytest.param(
-            jwt.encode({"sub": "1"}, "wrong_secret", algorithm="HS256"),
+            jwt.encode({"sub": "1"}, "wrong_secret_wrong_secret_wrong_secret", algorithm="HS256"),
             id="wrong_secret",
         ),
         pytest.param(
@@ -1137,3 +1138,133 @@ def test_delete_nonexistent_receipt(client: TestClient):
     response = client.delete("/receipts/999")
 
     assert response.status_code == 404
+
+
+def test_patch_receipts_fields(client: TestClient, make_receipt):
+    receipt = make_receipt(
+        shop="test_shop", total=100, items=[{"name": "test", "price": "100"}]
+    )
+
+    response = client.patch(
+        f"/receipts/{receipt['id']}", json={"shop": "new_test_shop"}
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["shop"] == "new_test_shop"
+    assert data["total"] == receipt["total"]
+    assert data["purchased_at"] == receipt["purchased_at"]
+
+    assert data["items"] == receipt["items"]
+
+
+def test_patch_receipts_items_fields(client: TestClient, make_receipt):
+
+    receipt = make_receipt(
+        items=[
+            {"name": "test1", "price": "100"},
+            {"name": "test2", "price": "200"},
+        ]
+    )
+
+    payload = {"items": [{"name": "new_test", "price": "1000.00"}]}
+
+    response = client.patch(
+        f"/receipts/{receipt['id']}",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["shop"] == receipt["shop"]
+    assert data["purchased_at"] == receipt["purchased_at"]
+    assert data["total"] == receipt["total"]
+
+    assert len(data["items"]) == 1
+    assert data["items"][0]["name"] == payload["items"][0]["name"]
+    assert data["items"][0]["price"] == payload["items"][0]["price"]
+
+
+def test_patch_foreign_receipt(client: TestClient, make_receipt, create_user):
+    receipt = make_receipt(
+        shop="own_shop", items=[{"name": "own_name", "price": "100"}]
+    )
+
+    foreign_auth = create_user(email="test@mail.com")
+
+    response = client.patch(
+        f"/receipts/{receipt['id']}",
+        json={
+            "shop": "foreign_shop",
+            "items": [
+                {
+                    "name": "foreign_name",
+                    "price": "200",
+                }
+            ],
+        },
+        headers=foreign_auth,
+    )
+
+    assert response.status_code == 404
+
+    data = response.json()
+
+    assert "detail" in data
+    assert len(data) == 1
+
+    check_response = client.get(f"/receipts/{receipt['id']}")
+
+    assert check_response.status_code == 200
+
+    assert check_response.json() == receipt
+
+
+def test_patch_nonexistent_receipt(client: TestClient):
+    response = client.patch("/receipts/999", json={})
+
+    assert response.status_code == 404
+
+    data = response.json()
+
+    assert "detail" in data
+    assert len(data) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"items": None}, id="none_items"),
+        pytest.param({"items": []}, id="empty_items"),
+        pytest.param({"purchased_at": None}, id="none_date"),
+    ],
+)
+def test_patch_with_unallowed_values(client: TestClient, make_receipt, payload):
+    receipt = make_receipt()
+
+    response = client.patch(f"/receipts/{receipt['id']}", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_patch_receipt_with_nonexistent_category(client: TestClient, make_receipt):
+    receipt = make_receipt(shop="old_shop", items=[{"name": "old_test", "price": 100}])
+
+    response = client.patch(
+        f"/receipts/{receipt['id']}",
+        json={
+            "shop": "new_shop",
+            "items": [{"name": "new_test", "price": 200, "category_id": 999}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+    get_response = client.get(f"/receipts/{receipt['id']}")
+
+    assert get_response.json() == receipt

@@ -22,6 +22,8 @@ from db import (
     fetch_receipts,
     get_user_by_email,
     get_user_by_id,
+    patch_receipt_fields,
+    patch_receipt_items,
     save_category,
     save_receipt,
     save_user,
@@ -32,6 +34,7 @@ from models import (
     CategoryOut,
     ReceiptIn,
     ReceiptOut,
+    ReceiptPatch,
     ReceiptTextIn,
     Stat,
     UserLogin,
@@ -281,6 +284,49 @@ def get_receipt(
         raise HTTPException(status_code=404, detail="чек не найден")
 
     return receipt
+
+
+@app.patch(
+    "/receipts/{receipt_id}",
+    responses={
+        404: {"description": "чек не найден"},
+        400: {"description": "указанной категории не существует"},
+    },
+)
+def edit_receipt(
+    receipt_change: ReceiptPatch,
+    receipt_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+) -> ReceiptOut:
+    with pool.connection() as conn:
+        patched = patch_receipt_fields(
+            conn=conn,
+            user_id=user_id,
+            receipt_id=receipt_id,
+            fields=receipt_change.model_dump(exclude_unset=True, exclude={"items"}),
+        )
+        if not patched:
+            raise HTTPException(status_code=404, detail="чек не найден")
+
+        if receipt_change.items is not None:
+            items = [
+                (item.name, item.price, item.category_id)
+                for item in receipt_change.items
+            ]
+
+            try:
+                patch_receipt_items(conn=conn, receipt_id=receipt_id, items=items)
+            except psycopg.errors.ForeignKeyViolation:
+                raise HTTPException(
+                    status_code=400, detail="указанной категории не существует"
+                ) from None
+
+        fetched = fetch_receipt(conn=conn, receipt_id=receipt_id, user_id=user_id)
+
+    if fetched is None:
+        raise RuntimeError("чек не найден сразу после изменения")
+
+    return fetched
 
 
 @app.delete(
