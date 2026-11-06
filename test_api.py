@@ -998,7 +998,11 @@ def test_no_token(client: TestClient, method, path, body):
         pytest.param("abc", id="not_token"),
         pytest.param(replaced, id="replaced_character"),
         pytest.param(
-            jwt.encode({"sub": "1"}, "wrong_secret_wrong_secret_wrong_secret", algorithm="HS256"),
+            jwt.encode(
+                {"sub": "1"},
+                "wrong_secret_wrong_secret_wrong_secret",
+                algorithm="HS256",
+            ),
             id="wrong_secret",
         ),
         pytest.param(
