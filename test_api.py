@@ -843,6 +843,7 @@ def test_login(client: TestClient):
     data_login = response_login.json()
 
     assert "access_token" in data_login
+    assert "refresh_token" in data_login
     assert data_login["token_type"] == "bearer"
 
     authorization = {"Authorization": f"Bearer {data_login['access_token']}"}
@@ -886,6 +887,106 @@ def test_login_short_password(client: TestClient):
 
 
 @pytest.mark.no_auth
+def test_refresh_tokens(client: TestClient, create_user_and_return_login):
+    login_data = create_user_and_return_login(
+        email="test@mail.com",
+        password="testpass",
+    )
+
+    refresh_response = client.post(
+        "/auth/refresh", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert refresh_response.status_code == 200
+
+    refresh_data = refresh_response.json()
+
+    assert "refresh_token" in refresh_data
+    assert "access_token" in refresh_data
+
+    assert refresh_data["refresh_token"] != login_data["refresh_token"]
+
+    me_response = client.get(
+        "/me", headers={"Authorization": f"Bearer {refresh_data['access_token']}"}
+    )
+
+    assert me_response.status_code == 200
+
+
+@pytest.mark.no_auth
+def test_disposable_refresh_token(client: TestClient, create_user_and_return_login):
+    login_data = create_user_and_return_login(
+        email="test@mail.com",
+        password="testpass",
+    )
+
+    refresh_response = client.post(
+        "/auth/refresh", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert refresh_response.status_code == 200
+
+    refresh_response = client.post(
+        "/auth/refresh", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert refresh_response.status_code == 401
+    assert "detail" in refresh_response.json()
+
+
+def test_bad_refresh_token(client: TestClient):
+    response = client.post("/auth/refresh", json={"refresh_token": "bad_token"})
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@pytest.mark.no_auth
+def test_refresh_with_expired_token(
+    client: TestClient, monkeypatch, create_user_and_return_login
+):
+    monkeypatch.setattr(api, "REFRESH_TOKEN_LIFETIME", -1)
+
+    login_data = create_user_and_return_login()
+
+    refresh_response = client.post(
+        "/auth/refresh", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert refresh_response.status_code == 401
+    assert "detail" in refresh_response.json()
+
+
+@pytest.mark.no_auth
+def test_logout_refresh(client: TestClient, create_user_and_return_login):
+    login_data = create_user_and_return_login(
+        email="test@mail.com",
+        password="testpass",
+    )
+
+    logout_response = client.post(
+        "/auth/logout", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert logout_response.status_code == 204
+
+    refresh_response = client.post(
+        "/auth/refresh", json={"refresh_token": login_data["refresh_token"]}
+    )
+
+    assert refresh_response.status_code == 401
+    assert "detail" in refresh_response.json()
+
+
+@pytest.mark.no_auth
+def test_logout_with_bad_refresh(client: TestClient):
+
+    logout_response = client.post("/auth/logout", json={"refresh_token": "bad_token"})
+
+    assert logout_response.status_code == 204
+
+
+@pytest.mark.no_auth
 def test_create_receipt_with_nonexistent_user(client: TestClient):
     token = create_access_token(999, 15)
 
@@ -919,8 +1020,10 @@ def test_create_receipt_with_nonexistent_user(client: TestClient):
         ),
     ],
 )
-def test_register_same_mail(client: TestClient, payload, create_user):
-    create_user(email="test@mail.com")
+def test_register_same_mail(client: TestClient, payload):
+    client.post(
+        "/auth/register", json={"email": "test@mail.com", "password": "testpass"}
+    )
 
     response = client.post("/auth/register", json=payload)
 
@@ -948,10 +1051,9 @@ def test_register_same_mail(client: TestClient, payload, create_user):
         ),
     ],
 )
-def test_login_bad_data(client: TestClient, bad_payload, create_user):
-    create_user(
-        email="test@mail.com",
-        password="testpass",
+def test_login_bad_data(client: TestClient, bad_payload):
+    client.post(
+        "/auth/register", json={"email": "test@mail.com", "password": "testpass"}
     )
 
     response = client.post("/auth/login", json=bad_payload)
@@ -1047,9 +1149,11 @@ def test_me_expired_token(client: TestClient):
 
 
 @pytest.mark.no_auth
-def test_user_scope_foreign_receipt(client: TestClient, create_user):
+def test_user_scope_foreign_receipt(client: TestClient, create_user_and_return_auth):
 
-    user_a_auth = create_user(email="user_A@mail.com", password="testpass")
+    user_a_auth = create_user_and_return_auth(
+        email="user_A@mail.com", password="testpass"
+    )
 
     response_receipt_a = client.post(
         "/receipts",
@@ -1059,7 +1163,9 @@ def test_user_scope_foreign_receipt(client: TestClient, create_user):
 
     assert response_receipt_a.status_code == 201
 
-    user_b_auth = create_user(email="user_B@mail.com", password="testpass")
+    user_b_auth = create_user_and_return_auth(
+        email="user_B@mail.com", password="testpass"
+    )
 
     response_get_receipt_by_id_a_auth = client.get(
         f"/receipts/{response_receipt_a.json()['id']}", headers=user_a_auth
@@ -1122,10 +1228,12 @@ def test_delete_receipt(client: TestClient, make_receipt):
     assert response.status_code == 404
 
 
-def test_delete_foreign_receipt(client: TestClient, make_receipt, create_user):
+def test_delete_foreign_receipt(
+    client: TestClient, make_receipt, create_user_and_return_auth
+):
     receipt_id = make_receipt()["id"]
 
-    foreign_auth = create_user(email="test@mail.com")
+    foreign_auth = create_user_and_return_auth(email="test@mail.com")
 
     foreign_delete_response = client.delete(
         f"/receipts/{receipt_id}", headers=foreign_auth
@@ -1193,12 +1301,14 @@ def test_patch_receipts_items_fields(client: TestClient, make_receipt):
     assert data["items"][0]["price"] == payload["items"][0]["price"]
 
 
-def test_patch_foreign_receipt(client: TestClient, make_receipt, create_user):
+def test_patch_foreign_receipt(
+    client: TestClient, make_receipt, create_user_and_return_auth
+):
     receipt = make_receipt(
         shop="own_shop", items=[{"name": "own_name", "price": "100"}]
     )
 
-    foreign_auth = create_user(email="test@mail.com")
+    foreign_auth = create_user_and_return_auth(email="test@mail.com")
 
     response = client.patch(
         f"/receipts/{receipt['id']}",

@@ -12,6 +12,10 @@ from pydantic import (
 )
 
 
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
 class UserBase(BaseModel):
     email: EmailStr = Field(max_length=100)
 

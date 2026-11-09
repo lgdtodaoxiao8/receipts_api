@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import psycopg
@@ -13,7 +14,13 @@ from pydantic import AwareDatetime, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from cache import close_cache, get_cached_parse, set_cached_parse
-from config import ACCESS_TOKEN_LIFETIME, API_KEY, DATABASE_URL, OPENAI_SERVICE_TIMEOUT
+from config import (
+    ACCESS_TOKEN_LIFETIME,
+    API_KEY,
+    DATABASE_URL,
+    OPENAI_SERVICE_TIMEOUT,
+    REFRESH_TOKEN_LIFETIME,
+)
 from db import (
     delete_receipt,
     fetch_categories,
@@ -24,8 +31,10 @@ from db import (
     get_user_by_id,
     patch_receipt_fields,
     patch_receipt_items,
+    pop_refresh_token,
     save_category,
     save_receipt,
+    save_refresh_token,
     save_user,
 )
 from llm import LLMClient, LLMServiceError, ReceiptParseError
@@ -36,12 +45,19 @@ from models import (
     ReceiptOut,
     ReceiptPatch,
     ReceiptTextIn,
+    RefreshIn,
     Stat,
     UserLogin,
     UserOut,
     UserRegister,
 )
-from security import TokenInfoError, create_access_token, decode_token
+from security import (
+    TokenInfoError,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_token,
+)
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -111,6 +127,33 @@ def create_user(user: UserRegister) -> UserOut:
     return user_out
 
 
+def _create_and_save_token_pair(
+    conn: psycopg.Connection,
+    user_id: int,
+) -> dict[str, str]:
+    access_token = create_access_token(
+        user_id=user_id,
+        duration_min=ACCESS_TOKEN_LIFETIME,
+    )
+
+    refresh_token = create_refresh_token()
+
+    hash_refresh_token = hash_token(refresh_token)
+
+    save_refresh_token(
+        conn=conn,
+        token_hash=hash_refresh_token,
+        expires_at=datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_LIFETIME),
+        user_id=user_id,
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
+
 @app.post(
     "/auth/login",
     status_code=200,
@@ -132,11 +175,37 @@ def login_user(user: UserLogin) -> dict[str, str]:
             status_code=401, detail="неверный email или пароль"
         ) from None
 
-    token = create_access_token(
-        user_id=fetched_user.id, duration_min=ACCESS_TOKEN_LIFETIME
-    )
+    with pool.connection() as conn:
+        auth = _create_and_save_token_pair(conn=conn, user_id=fetched_user.id)
 
-    return {"access_token": token, "token_type": "bearer"}
+    return auth
+
+
+@app.post(
+    "/auth/refresh",
+    status_code=200,
+    responses={401: {"description": "неверный или истекший токен"}},
+)
+def update_tokens(current_refresh: RefreshIn) -> dict[str, str]:
+    current_token_hash = hash_token(current_refresh.refresh_token)
+
+    with pool.connection() as conn:
+        user_id = pop_refresh_token(conn=conn, token_hash=current_token_hash)
+
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="неверный или истекший токен")
+
+        auth = _create_and_save_token_pair(conn=conn, user_id=user_id)
+
+    return auth
+
+
+@app.post("/auth/logout", status_code=204)
+def logout_user(current_refresh: RefreshIn) -> None:
+    current_refresh_hash = hash_token(current_refresh.refresh_token)
+
+    with pool.connection() as conn:
+        pop_refresh_token(conn=conn, token_hash=current_refresh_hash)
 
 
 def read_categories() -> list[CategoryOut]:

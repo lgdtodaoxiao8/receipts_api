@@ -83,16 +83,34 @@ POST /auth/login
 ```json
 200 OK
 
-{"access_token": "eyJhbGciOi...", "token_type": "bearer"}
+{"access_token": "eyJhbGciOi...", "refresh_token": "kq3R0n...", "token_type": "bearer"}
 ```
 
-From then on, send the token in a header with every request:
+From then on, send the access token in a header with every request:
 
 ```
 Authorization: Bearer eyJhbGciOi...
 ```
 
-A token lasts 15 minutes; after that you sign in again. `GET /me` returns the id and email of the token's owner.
+An access token lasts 15 minutes. When it expires, you get a new one with the refresh token, without entering the password again:
+
+```json
+POST /auth/refresh
+
+{"refresh_token": "kq3R0n..."}
+```
+
+The response is a new token pair in the same shape as at sign-in. A refresh token lasts 30 days and works once, so next time use the one that came in the response.
+
+Signing out revokes the refresh token. The answer is 204 with no body, even if the token was already invalid:
+
+```json
+POST /auth/logout
+
+{"refresh_token": "kq3R0n..."}
+```
+
+`GET /me` returns the id and email of the access token's owner.
 
 Emails are lowercased, so `User@Mail.com` and `user@mail.com` are the same account. An email can be up to 100 characters, a password from 8 to 128.
 
@@ -103,7 +121,9 @@ In Swagger, click Authorize at the top of the page and paste the token without t
 | Method | Path | Description | Token required |
 |--------|------|-------------|----------------|
 | POST | /auth/register | Register | no |
-| POST | /auth/login | Sign in, get a token | no |
+| POST | /auth/login | Sign in, get an access and a refresh token | no |
+| POST | /auth/refresh | Get a new token pair with a refresh token | no |
+| POST | /auth/logout | Sign out, revokes the refresh token | no |
 | GET | /me | Current user | yes |
 | POST | /receipts/parse | Parse receipt text into structured data | yes |
 | POST | /receipts | Create a receipt | yes |
@@ -119,7 +139,7 @@ In Swagger, click Authorize at the top of the page and paste the token without t
 Response codes:
 
 - 400: an item refers to a category that doesn't exist;
-- 401: no token, a broken or expired token, wrong email or password at sign-in, or the token's user no longer exists;
+- 401: no token, a broken or expired token, a refresh token that is unknown, already used or expired, wrong email or password at sign-in, or the token's user no longer exists;
 - 404: the receipt doesn't exist or belongs to someone else;
 - 409: the email is already registered, or a category with that name already exists;
 - 422: the data failed validation (including `null` for `items` or `purchased_at` when editing a receipt), the text couldn't be parsed as a receipt, or the period bounds have no time zone or the end comes before the start;
@@ -262,14 +282,15 @@ If the receipt doesn't exist or belongs to someone else, the answer is 404, the 
 
 ## Data schema
 
-Four tables:
+Five tables:
 
 - `users`: email (unique), password hash, registration time;
 - `receipts`: the receipt itself, meaning its owner, purchase time, shop and total;
 - `items`: the receipt's line items, pointing to the receipt and, if set, to a category;
-- `categories`: the list of categories, shared by all users.
+- `categories`: the list of categories, shared by all users;
+- `refresh_tokens`: hashes of issued refresh tokens, with their owners and expiry times.
 
-Both foreign keys, from items to receipts and from receipts to users, are `ON DELETE CASCADE`. So when a receipt is deleted, Postgres removes its items in the same transaction, and the code only has to delete one row. Deleting a user takes their receipts with them in the same way.
+The foreign keys from items to receipts, from receipts to users and from refresh tokens to users are `ON DELETE CASCADE`. So when a receipt is deleted, Postgres removes its items in the same transaction, and the code only has to delete one row. Deleting a user takes their receipts and tokens with them in the same way.
 
 Items are read with a `LEFT JOIN` on categories, so an item without a category doesn't disappear from the response; its `category_name` is just empty.
 
@@ -279,7 +300,11 @@ The category list is filled by a migration: sixteen categories, enough for an or
 
 **Passwords are stored only as argon2 hashes.** Argon2 is deliberately slow and memory-hungry, so brute-forcing passwords from a leaked database takes a lot of time and money. The hash never appears in API responses: user data has its own response model that simply doesn't include it.
 
-**JWT instead of sessions.** The token holds the user id and an expiry time, signed with a secret key. To check a request, the server only verifies the signature and doesn't need to hit the database. The downside of JWT is that an issued token can't be revoked before it expires, which is why the lifetime is short, 15 minutes.
+**JWT instead of sessions.** The token holds the user id and an expiry time, signed with a secret key. To check a request, the server only verifies the signature and doesn't need to hit the database. The downside of JWT is that an issued token can't be revoked before it expires, which is why the lifetime is short, 15 minutes, and there's a refresh token so you don't have to sign in that often.
+
+**The refresh token is stored in the database as a hash.** It's a random string from `secrets`. A JWT wouldn't help here: the token has to be looked up in the database anyway, or it couldn't be revoked on sign-out. Only its SHA-256 goes into the table, so a leaked database is useless for signing in. Passwords use slow argon2, but a fast hash is enough here: a long random string can't be brute-forced, and the token has to be found by its hash on every refresh.
+
+**Refresh token rotation.** Every refresh deletes the old token and gives the client a new one. The delete and the expiry check are a single `DELETE ... RETURNING` query, so two simultaneous requests with the same token can't both get a new pair. Deleting the old token and saving the new one happen in one transaction, and if the save fails, the old token keeps working.
 
 **The receipt's owner comes from the token.** There is no `user_id` field in the request body. If there were, anyone could put in someone else's id and create receipts in their name. The server reads the id from the signed token, and the client can't change it.
 
@@ -325,7 +350,7 @@ What's covered:
 - creating, reading, editing and deleting receipts, pagination, categories, discrepancy calculation, the period summary;
 - input validation and error codes;
 - text parsing, with the model replaced by a fake so the tests never call OpenAI;
-- registration, sign-in, `/me`, a duplicate email in any letter case, email and password length right at the limit and one step past it;
+- registration, sign-in, `/me`, token refresh, single use of a refresh token, expired and unknown refresh tokens, sign-out, a duplicate email in any letter case, email and password length right at the limit and one step past it;
 - that the password hash never shows up in any response;
 - that every protected endpoint returns 401 without a token;
 - broken tokens: garbage instead of a token, a token with one character changed, a token signed with a different key, one without `sub` and one with a non-numeric `sub`, plus an expired token and malformed headers;
@@ -338,7 +363,7 @@ CI runs ruff, mypy, the migrations and all tests on every push.
 
 ## Plans
 
-- Refresh tokens, so you don't have to sign in every 15 minutes, and sign-out that revokes the token.
+- Scheduled cleanup of expired refresh tokens: an expired token is rejected, but it stays in the table.
 - Rate limiting for sign-in attempts and model requests.
 
 ## License

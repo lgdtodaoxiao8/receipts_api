@@ -39,7 +39,7 @@ def clean_cache() -> None:
 
 
 @pytest.fixture
-def create_user(client: TestClient, clean_db) -> Callable[..., dict[str, str]]:
+def create_user_and_return_login(client: TestClient, clean_db):
     def _make(
         email: str = "example@mail.com",
         password: str = "password-example",
@@ -60,7 +60,22 @@ def create_user(client: TestClient, clean_db) -> Callable[..., dict[str, str]]:
 
         assert login_response.status_code == 200
 
-        token = login_response.json()["access_token"]
+        return login_response.json()
+
+    return _make
+
+
+@pytest.fixture
+def create_user_and_return_auth(
+    client: TestClient, clean_db, create_user_and_return_login
+) -> Callable[..., dict[str, str]]:
+    def _make(
+        email: str = "example@mail.com",
+        password: str = "password-example",
+    ) -> dict[str, str]:
+        credentials = create_user_and_return_login(email=email, password=password)
+
+        token = credentials["access_token"]
 
         return {"Authorization": f"Bearer {token}"}
 
@@ -68,11 +83,13 @@ def create_user(client: TestClient, clean_db) -> Callable[..., dict[str, str]]:
 
 
 @pytest.fixture(autouse=True)
-def default_user(request, client: TestClient, create_user) -> Iterator[None]:
+def default_user(
+    request, client: TestClient, create_user_and_return_auth
+) -> Iterator[None]:
     if request.node.get_closest_marker("no_auth"):
         yield
         return
-    client.headers.update(create_user())
+    client.headers.update(create_user_and_return_auth())
     yield
     client.headers.pop("Authorization", None)
 

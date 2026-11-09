@@ -14,6 +14,8 @@ REDIS_URL = os.environ["REDIS_URL"]
 
 ACCESS_TOKEN_LIFETIME = 15  # in minutes
 
+REFRESH_TOKEN_LIFETIME = 30  # in days
+
 OPENAI_SERVICE_TIMEOUT = 30  # in seconds
 
 OPENAI_MODEL_NAME = "gpt-4o-mini"

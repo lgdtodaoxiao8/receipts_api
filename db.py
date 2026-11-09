@@ -335,3 +335,36 @@ def get_user_by_id(conn: psycopg.Connection, user_id: int) -> UserOut:
         raise LookupError("Пользователь с таким id не найден")
 
     return UserOut(**fetched_row)
+
+
+def save_refresh_token(
+    conn: psycopg.Connection, token_hash: str, user_id: int, expires_at: datetime
+) -> None:
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+            VALUES (%s, %s, %s)
+            """,
+            (user_id, token_hash, expires_at),
+        )
+
+
+def pop_refresh_token(conn: psycopg.Connection, token_hash: str) -> int | None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            DELETE FROM refresh_tokens
+            WHERE token_hash = %s
+            AND expires_at > now()
+            RETURNING user_id
+            """,
+            (token_hash,),
+        )
+        fetched_row = cur.fetchone()
+
+    if fetched_row is None:
+        return None
+
+    return fetched_row["user_id"]
